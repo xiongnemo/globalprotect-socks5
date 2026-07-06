@@ -7,6 +7,12 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
+)
+
+const (
+	defaultHTTPTimeout       = 30 * time.Second
+	maxPreloginResponseBytes = 1 << 20
 )
 
 type PortalURL struct {
@@ -39,7 +45,7 @@ type Client struct {
 
 func NewClient(httpClient *http.Client, profile ClientProfile) Client {
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = &http.Client{Timeout: defaultHTTPTimeout}
 	}
 	return Client{httpClient: httpClient, profile: profile}
 }
@@ -67,9 +73,12 @@ func (c Client) Prelogin(ctx context.Context, portal PortalURL) (Prelogin, error
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return Prelogin{}, fmt.Errorf("prelogin status %d: %w", resp.StatusCode, ErrInvalidPrelogin)
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPreloginResponseBytes+1))
 	if err != nil {
 		return Prelogin{}, fmt.Errorf("read prelogin response: %w", err)
+	}
+	if len(body) > maxPreloginResponseBytes {
+		return Prelogin{}, fmt.Errorf("prelogin response too large: %w", ErrInvalidPrelogin)
 	}
 	return ParsePrelogin(body)
 }
