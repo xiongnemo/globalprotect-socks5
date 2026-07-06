@@ -1,12 +1,14 @@
 # globalprotect-socks5
 
-Pure-Go MVP for a local SOCKS5 front-end to GlobalProtect-compatible authentication and tunnel plumbing.
+Pure-Go MVP for a local SOCKS5 front-end to GlobalProtect-compatible authentication and pre-tunnel scaffolding.
 
 This repository intentionally starts with the safe pieces that can be tested without bypassing SSO/MFA:
 
 - parse GlobalProtect SSO callback/cookie artifacts without printing bearer secrets;
 - probe a GlobalProtect portal prelogin endpoint and print the SSO URL when returned;
 - run a local SOCKS5 TCP `CONNECT` listener over an injectable dialer seam.
+
+The current `serve` command is a SOCKS5 scaffold with a direct TCP dialer; it is not VPN-backed egress until a GlobalProtect tunnel dialer is added.
 
 It does not read browser cookie databases, bypass MFA, call an external `openconnect` binary, use Docker as runtime, or use cgo.
 
