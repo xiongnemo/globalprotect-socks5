@@ -23,6 +23,7 @@ func ParseAuthArtifact(input string) (AuthArtifact, error) {
 }
 
 func parseCallback(payload string) (AuthArtifact, error) {
+	payload = strings.TrimPrefix(payload, "/")
 	if strings.HasPrefix(payload, "cas-as=") {
 		values, err := url.ParseQuery(payload)
 		if err != nil {
