@@ -10,12 +10,15 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/xiongnemo/globalprotect-socks5/internal/gp"
 	"github.com/xiongnemo/globalprotect-socks5/internal/socks5"
 )
 
 var ErrUsage = errors.New("app: usage")
+
+const defaultHTTPTimeout = 30 * time.Second
 
 type IO struct {
 	Stdout     io.Writer
@@ -35,7 +38,7 @@ func NewRunner(ioConfig IO) Runner {
 		ioConfig.Stderr = os.Stderr
 	}
 	if ioConfig.HTTPClient == nil {
-		ioConfig.HTTPClient = http.DefaultClient
+		ioConfig.HTTPClient = &http.Client{Timeout: defaultHTTPTimeout}
 	}
 	return Runner{io: ioConfig}
 }
