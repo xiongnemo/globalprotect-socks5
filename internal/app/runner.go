@@ -21,9 +21,10 @@ var ErrUsage = errors.New("app: usage")
 const defaultHTTPTimeout = 30 * time.Second
 
 type IO struct {
-	Stdout     io.Writer
-	Stderr     io.Writer
-	HTTPClient *http.Client
+	Stdout       io.Writer
+	Stderr       io.Writer
+	HTTPClient   *http.Client
+	AuthCapturer AuthCapturer
 }
 
 type Runner struct {
@@ -48,6 +49,8 @@ func (r Runner) Run(ctx context.Context, args []string) error {
 		return r.usage()
 	}
 	switch args[0] {
+	case "auth":
+		return r.auth(ctx, args[1:])
 	case "parse-auth":
 		return r.parseAuth(args[1:])
 	case "probe":
@@ -67,17 +70,7 @@ func (r Runner) parseAuth(args []string) error {
 	if err != nil {
 		return fmt.Errorf("parse auth artifact: %w", err)
 	}
-	_, err = fmt.Fprintf(r.io.Stdout, "kind=%s username=%s token_present=%t prelogin_cookie_present=%t portal_cookie_present=%t\n",
-		artifact.Kind,
-		artifact.Username,
-		artifact.Token.String() != "",
-		artifact.PreloginCookie.String() != "",
-		artifact.PortalUserAuthCookie.String() != "",
-	)
-	if err != nil {
-		return fmt.Errorf("write auth summary: %w", err)
-	}
-	return nil
+	return r.writeAuthSummary(artifact)
 }
 
 func (r Runner) probe(ctx context.Context, args []string) error {
@@ -154,7 +147,7 @@ func dialContext(ctx context.Context, network string, address string) (net.Conn,
 }
 
 func (r Runner) usage() error {
-	_, err := fmt.Fprintln(r.io.Stderr, "usage: gp-socks <parse-auth|probe|serve> [options]")
+	_, err := fmt.Fprintln(r.io.Stderr, "usage: gp-socks <auth|parse-auth|probe|serve> [options]")
 	if err != nil {
 		return fmt.Errorf("write usage: %w", err)
 	}

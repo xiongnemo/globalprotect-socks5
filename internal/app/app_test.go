@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -16,6 +17,8 @@ import (
 	"time"
 
 	"github.com/xiongnemo/globalprotect-socks5/internal/app"
+	"github.com/xiongnemo/globalprotect-socks5/internal/browserauth"
+	"github.com/xiongnemo/globalprotect-socks5/internal/gp"
 )
 
 func Test_Run_printsAuthArtifactSummary_whenParseAuthReceivesCallback(t *testing.T) {
@@ -108,6 +111,74 @@ func Test_Run_writesPostSSOHTML_whenProbeReceivesSAMLPostAndFilePath(t *testing.
 	}
 }
 
+func Test_Run_printsRedactedAuthSummary_whenAuthCommandCapturesSAMLArtifact(t *testing.T) {
+	// Given
+	html := `<html><body><form method="POST" action="https://idp.example.test/sso"><input name="SAMLRequest" value="secret-saml-request"></form></body></html>`
+	encoded := base64.StdEncoding.EncodeToString([]byte(html))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/global-protect/prelogin.esp" {
+			t.Fatalf("path = %s, want /global-protect/prelogin.esp", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`<prelogin-response><saml-auth-method>POST</saml-auth-method><saml-request>` + encoded + `</saml-request><saml-default-browser>yes</saml-default-browser></prelogin-response>`))
+	}))
+	defer server.Close()
+	preloginCookie, err := gp.NewSecret("pre-cookie")
+	if err != nil {
+		t.Fatalf("NewSecret() error = %v", err)
+	}
+	capturer := &fakeAuthCapturer{artifact: gp.AuthArtifact{Kind: gp.ArtifactSAML, Username: "alice@example.test", PreloginCookie: preloginCookie}}
+	var stdout bytes.Buffer
+	runner := app.NewRunner(app.IO{Stdout: &stdout, HTTPClient: server.Client(), AuthCapturer: capturer})
+
+	// When
+	err = runner.Run(context.Background(), []string{"auth", "--portal", server.URL, "--host-id", "test-host", "--browser", "chrome", "--timeout", "1s"})
+
+	// Then
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !capturer.called {
+		t.Fatal("auth capturer was not called")
+	}
+	if capturer.request.Browser != browserauth.BrowserChrome {
+		t.Fatalf("Browser = %q, want %q", capturer.request.Browser, browserauth.BrowserChrome)
+	}
+	if capturer.request.Prelogin.SAMLRequest.String() != html {
+		t.Fatalf("SAMLRequest = %q, want original POST HTML", capturer.request.Prelogin.SAMLRequest.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "kind=saml username=alice@example.test") {
+		t.Fatalf("stdout = %q, want redacted SAML summary", out)
+	}
+	if !strings.Contains(out, "prelogin_cookie_present=true") {
+		t.Fatalf("stdout = %q, want prelogin cookie presence", out)
+	}
+	if strings.Contains(out, "pre-cookie") || strings.Contains(out, "secret-saml-request") || strings.Contains(out, html) {
+		t.Fatalf("stdout leaked secret material: %q", out)
+	}
+}
+
+func Test_Run_rejectsPasswordAuthPrelogin_whenAuthCommandNeedsSAML(t *testing.T) {
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<prelogin-response><auth-method>LDAP</auth-method></prelogin-response>`))
+	}))
+	defer server.Close()
+	capturer := &fakeAuthCapturer{}
+	runner := app.NewRunner(app.IO{HTTPClient: server.Client(), AuthCapturer: capturer})
+
+	// When
+	err := runner.Run(context.Background(), []string{"auth", "--portal", server.URL})
+
+	// Then
+	if !errors.Is(err, gp.ErrInvalidPrelogin) {
+		t.Fatalf("error = %v, want ErrInvalidPrelogin", err)
+	}
+	if capturer.called {
+		t.Fatal("auth capturer was called for password prelogin")
+	}
+}
+
 func Test_Run_servesSOCKS5Greeting_whenServeCommandStarts(t *testing.T) {
 	// Given
 	stdout := newListenCapture()
@@ -151,6 +222,18 @@ type listenCapture struct {
 	mu   sync.Mutex
 	text string
 	addr chan string
+}
+
+type fakeAuthCapturer struct {
+	artifact gp.AuthArtifact
+	request  browserauth.Request
+	called   bool
+}
+
+func (c *fakeAuthCapturer) Capture(_ context.Context, request browserauth.Request) (gp.AuthArtifact, error) {
+	c.called = true
+	c.request = request
+	return c.artifact, nil
 }
 
 func newListenCapture() listenCapture {
