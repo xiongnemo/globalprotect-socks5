@@ -22,6 +22,37 @@ func ParseAuthArtifact(input string) (AuthArtifact, error) {
 	return artifactFromValues(values)
 }
 
+func ParseAuthResponse(headers map[string]string, body string) (AuthArtifact, error) {
+	artifact, err := ParseAuthHeaders(headers)
+	if err == nil {
+		return artifact, nil
+	}
+	if !errors.Is(err, ErrMissingAuthArtifact) {
+		return AuthArtifact{}, err
+	}
+	return ParseAuthBody(body)
+}
+
+func ParseAuthHeaders(headers map[string]string) (AuthArtifact, error) {
+	values := url.Values{}
+	for name, value := range headers {
+		key := strings.ToLower(strings.TrimSpace(name))
+		switch key {
+		case "saml-username", "prelogin-cookie", "portal-userauthcookie":
+			values.Set(key, strings.TrimSpace(value))
+		}
+	}
+	return artifactFromValues(values)
+}
+
+func ParseAuthBody(body string) (AuthArtifact, error) {
+	trimmed := strings.TrimSpace(body)
+	if strings.HasPrefix(trimmed, "<") {
+		return artifactFromHTML(trimmed)
+	}
+	return ParseAuthArtifact(trimmed)
+}
+
 func parseCallback(payload string) (AuthArtifact, error) {
 	payload = strings.TrimPrefix(payload, "/")
 	if strings.HasPrefix(payload, "cas-as=") {
