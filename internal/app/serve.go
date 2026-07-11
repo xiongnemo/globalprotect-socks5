@@ -105,9 +105,9 @@ func (r Runner) newTunnelDialer(ctx context.Context, options serveTunnelOptions)
 	if err != nil {
 		return nil, err
 	}
-	session, err := client.GatewayLogin(ctx, material.gateway, material.artifact)
+	session, err := r.gatewayLoginWithFallback(ctx, gatewayLoginRequest{client: client, gateway: material.gateway, artifact: material.artifact, options: options})
 	if err != nil {
-		return nil, fmt.Errorf("gateway login: %w", err)
+		return nil, err
 	}
 	config, err := client.GatewayConfig(ctx, material.gateway, session)
 	if err != nil {
