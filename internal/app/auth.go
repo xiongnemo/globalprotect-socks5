@@ -16,7 +16,7 @@ type AuthCapturer interface {
 	Capture(context.Context, browserauth.Request) (gp.AuthArtifact, error)
 }
 
-func (r Runner) auth(ctx context.Context, args []string) error {
+func (r Runner) auth(ctx context.Context, args []string) (err error) {
 	flags := flag.NewFlagSet("auth", flag.ContinueOnError)
 	flags.SetOutput(r.io.Stderr)
 	portalRaw := flags.String("portal", "", "GlobalProtect portal URL")
@@ -25,9 +25,15 @@ func (r Runner) auth(ctx context.Context, args []string) error {
 	browserPath := flags.String("browser-path", "", "explicit Chrome or Edge executable path")
 	browserProfileDir := flags.String("browser-profile-dir", "", "explicit persistent Chrome/Edge profile directory for browser SSO")
 	timeout := flags.Duration("timeout", defaultBrowserAuthTimeout, "maximum time to wait for browser SSO")
+	debugLogPath := flags.String("debug-log", "", "write redacted GlobalProtect HTTP debug JSONL to this file")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("parse auth flags: %w", err)
 	}
+	debugLog, clientOptions, err := openDebugLog(*debugLogPath)
+	if err != nil {
+		return err
+	}
+	defer closeDebugLog(debugLog, *debugLogPath, &err)
 	browser, err := browserauth.ParseBrowser(*browserRaw)
 	if err != nil {
 		return err
@@ -36,7 +42,7 @@ func (r Runner) auth(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("portal: %w", err)
 	}
-	client := gp.NewClient(r.io.HTTPClient, gp.ClientProfile{HostID: *hostID, Computer: "gp-socks", ClientOS: gp.ClientOSLinux})
+	client := gp.NewClient(r.io.HTTPClient, gp.ClientProfile{HostID: *hostID, Computer: "gp-socks", ClientOS: gp.ClientOSLinux}, clientOptions...)
 	prelogin, err := client.Prelogin(ctx, portal)
 	if err != nil {
 		return err

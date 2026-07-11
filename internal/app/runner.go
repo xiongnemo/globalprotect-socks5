@@ -77,20 +77,26 @@ func (r Runner) parseAuth(args []string) error {
 	return r.writeAuthSummary(artifact)
 }
 
-func (r Runner) probe(ctx context.Context, args []string) error {
+func (r Runner) probe(ctx context.Context, args []string) (err error) {
 	flags := flag.NewFlagSet("probe", flag.ContinueOnError)
 	flags.SetOutput(r.io.Stderr)
 	portalRaw := flags.String("portal", "", "GlobalProtect portal URL")
 	hostID := flags.String("host-id", "gp-socks", "stable GlobalProtect host-id")
 	ssoFile := flags.String("sso-file", "", "write SAML POST HTML to this file")
+	debugLogPath := flags.String("debug-log", "", "write redacted GlobalProtect HTTP debug JSONL to this file")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("parse probe flags: %w", err)
 	}
+	debugLog, clientOptions, err := openDebugLog(*debugLogPath)
+	if err != nil {
+		return err
+	}
+	defer closeDebugLog(debugLog, *debugLogPath, &err)
 	portal, err := gp.NewPortalURL(*portalRaw)
 	if err != nil {
 		return fmt.Errorf("portal: %w", err)
 	}
-	client := gp.NewClient(r.io.HTTPClient, gp.ClientProfile{HostID: *hostID, Computer: "gp-socks", ClientOS: gp.ClientOSLinux})
+	client := gp.NewClient(r.io.HTTPClient, gp.ClientProfile{HostID: *hostID, Computer: "gp-socks", ClientOS: gp.ClientOSLinux}, clientOptions...)
 	prelogin, err := client.Prelogin(ctx, portal)
 	if err != nil {
 		return err
