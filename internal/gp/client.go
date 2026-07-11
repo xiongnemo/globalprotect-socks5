@@ -70,20 +70,31 @@ func (c Client) Prelogin(ctx context.Context, portal PortalURL) (Prelogin, error
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", "PAN GlobalProtect")
+	debugEvent := newDebugHTTPEvent("prelogin", req, form)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		if logErr := c.logHTTP(debugEvent.withError()); logErr != nil {
+			return Prelogin{}, debugLogError(fmt.Errorf("post prelogin: %w", err), logErr)
+		}
 		return Prelogin{}, fmt.Errorf("post prelogin: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Prelogin{}, fmt.Errorf("prelogin status %d: %w", resp.StatusCode, ErrInvalidPrelogin)
-	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPreloginResponseBytes+1))
 	if err != nil {
+		if logErr := c.logHTTP(debugEvent.withStatus(resp.StatusCode)); logErr != nil {
+			return Prelogin{}, debugLogError(fmt.Errorf("read prelogin response: %w", err), logErr)
+		}
 		return Prelogin{}, fmt.Errorf("read prelogin response: %w", err)
 	}
+	logErr := c.logHTTP(debugEvent.withResponse(resp.StatusCode, body))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return Prelogin{}, debugLogError(fmt.Errorf("prelogin status %d: %w", resp.StatusCode, ErrInvalidPrelogin), logErr)
+	}
 	if len(body) > maxPreloginResponseBytes {
-		return Prelogin{}, fmt.Errorf("prelogin response too large: %w", ErrInvalidPrelogin)
+		return Prelogin{}, debugLogError(fmt.Errorf("prelogin response too large: %w", ErrInvalidPrelogin), logErr)
+	}
+	if logErr != nil {
+		return Prelogin{}, logErr
 	}
 	return ParsePrelogin(body)
 }
