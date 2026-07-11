@@ -1,6 +1,6 @@
 module github.com/xiongnemo/globalprotect-socks5
 
-go 1.23
+go 1.23.1
 
 require (
 	github.com/chromedp/cdproto v0.0.0-20250403032234-65de8f5d025b
