@@ -34,6 +34,7 @@ type serveTunnelOptions struct {
 	hostID      string
 	browser     browserauth.Browser
 	browserPath string
+	profileDir  string
 	timeout     time.Duration
 }
 
@@ -52,6 +53,7 @@ func (r Runner) serve(ctx context.Context, args []string) error {
 	hostID := flags.String("host-id", "gp-socks", "stable GlobalProtect host-id")
 	browserRaw := flags.String("browser", string(browserauth.BrowserAuto), "browser: auto, chrome, or edge")
 	browserPath := flags.String("browser-path", "", "explicit Chrome or Edge executable path")
+	browserProfileDir := flags.String("browser-profile-dir", "", "explicit persistent Chrome/Edge profile directory for browser SSO")
 	timeout := flags.Duration("timeout", defaultBrowserAuthTimeout, "maximum time to wait for browser SSO")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("parse serve flags: %w", err)
@@ -68,6 +70,7 @@ func (r Runner) serve(ctx context.Context, args []string) error {
 			hostID:      *hostID,
 			browser:     browser,
 			browserPath: *browserPath,
+			profileDir:  *browserProfileDir,
 			timeout:     *timeout,
 		})
 		if err != nil {
@@ -138,6 +141,7 @@ func (r Runner) captureServeArtifact(ctx context.Context, request serveAuthReque
 		Prelogin:    prelogin,
 		Browser:     request.options.browser,
 		BrowserPath: request.options.browserPath,
+		ProfileDir:  request.options.profileDir,
 		Timeout:     request.options.timeout,
 	})
 	if err != nil {
