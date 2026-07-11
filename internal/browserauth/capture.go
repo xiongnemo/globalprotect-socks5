@@ -29,7 +29,7 @@ type captureResult struct {
 
 type responseBodyReader func(context.Context, network.RequestID) (string, error)
 
-func (c Capturer) Capture(ctx context.Context, request Request) (gp.AuthArtifact, error) {
+func (c Capturer) Capture(ctx context.Context, request Request) (artifact gp.AuthArtifact, err error) {
 	if request.Prelogin.AuthMode != gp.AuthModeSAML || request.Prelogin.SAMLRequest.String() == "" {
 		return gp.AuthArtifact{}, fmt.Errorf("browser auth prelogin: %w", gp.ErrInvalidPrelogin)
 	}
@@ -37,17 +37,21 @@ func (c Capturer) Capture(ctx context.Context, request Request) (gp.AuthArtifact
 	if err != nil {
 		return gp.AuthArtifact{}, err
 	}
-	profileDir, err := osMkdirTemp("", "gp-socks-browser-*")
-	if err != nil {
-		return gp.AuthArtifact{}, fmt.Errorf("create browser profile: %w", err)
-	}
-	defer osRemoveAll(profileDir)
-
-	target, err := navigationURL(request.Prelogin, profileDir)
+	profile, err := captureProfileDir(request.ProfileDir)
 	if err != nil {
 		return gp.AuthArtifact{}, err
 	}
-	return c.runner(ctx, browserRunRequest{browserPath: browserPath, profileDir: profileDir, target: target, timeout: request.Timeout})
+	defer func() {
+		if cleanupErr := profile.cleanup(); cleanupErr != nil && err == nil {
+			err = cleanupErr
+		}
+	}()
+
+	target, err := navigationURL(request.Prelogin, profile.dir)
+	if err != nil {
+		return gp.AuthArtifact{}, err
+	}
+	return c.runner(ctx, browserRunRequest{browserPath: browserPath, profileDir: profile.dir, target: target, timeout: request.Timeout})
 }
 
 func listenForResponses(events chan<- responseEvent, results chan<- captureResult) func(any) {

@@ -27,6 +27,7 @@ type Request struct {
 	Prelogin    gp.Prelogin
 	Browser     Browser
 	BrowserPath string
+	ProfileDir  string
 	Timeout     time.Duration
 }
 
