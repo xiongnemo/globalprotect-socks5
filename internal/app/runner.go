@@ -20,11 +20,12 @@ var ErrUsage = errors.New("app: usage")
 const defaultHTTPTimeout = 30 * time.Second
 
 type IO struct {
-	Stdout       io.Writer
-	Stderr       io.Writer
-	HTTPClient   *http.Client
-	AuthCapturer AuthCapturer
-	DialContext  socks5.DialFunc
+	Stdout                io.Writer
+	Stderr                io.Writer
+	HTTPClient            *http.Client
+	AuthCapturer          AuthCapturer
+	DialContext           socks5.DialFunc
+	PacketTunnelConnector PacketTunnelConnector
 }
 
 type Runner struct {
