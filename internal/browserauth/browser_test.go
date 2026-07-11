@@ -1,6 +1,7 @@
 package browserauth
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -81,5 +82,22 @@ func Test_stringHeaders_convertsCDPHeaderValues(t *testing.T) {
 	// Then
 	if got["Retry-After"] != "5" {
 		t.Fatalf("Retry-After = %q, want 5", got["Retry-After"])
+	}
+}
+
+func Test_cdprotoIPAddressSpace_acceptsLoopback_whenChromeEmitsNewEnum(t *testing.T) {
+	// Given
+	input := []byte(`"Loopback"`)
+
+	// When
+	var got network.IPAddressSpace
+	err := json.Unmarshal(input, &got)
+
+	// Then
+	if err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if got != network.IPAddressSpaceLoopback {
+		t.Fatalf("IPAddressSpace = %q, want %q", got, network.IPAddressSpaceLoopback)
 	}
 }

@@ -3,8 +3,9 @@ module github.com/xiongnemo/globalprotect-socks5
 go 1.23.1
 
 require (
-	github.com/chromedp/cdproto v0.0.0-20250403032234-65de8f5d025b
+	github.com/chromedp/cdproto v0.0.0-20250630014756-b7288190f53c
 	github.com/chromedp/chromedp v0.13.7
+	github.com/noisysockets/netstack v0.9.0
 )
 
 require (
@@ -13,5 +14,7 @@ require (
 	github.com/gobwas/httphead v0.1.0 // indirect
 	github.com/gobwas/pool v0.2.1 // indirect
 	github.com/gobwas/ws v1.4.0 // indirect
+	github.com/google/btree v1.1.2 // indirect
 	golang.org/x/sys v0.29.0 // indirect
+	golang.org/x/time v0.7.0 // indirect
 )
