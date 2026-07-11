@@ -65,7 +65,14 @@ jobs:
       - name: Calculate release version
         id: version
         shell: bash
-        run: echo "version=$(go run ./scripts/release-version)" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          version=$(go run ./scripts/release-version)
+          if [[ ! "$version" =~ ^v0\.0\.[1-9][0-9]*$ ]]; then
+            echo "Unexpected release version: ${version}" >&2
+            exit 1
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
