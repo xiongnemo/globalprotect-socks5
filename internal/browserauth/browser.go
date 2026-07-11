@@ -32,10 +32,11 @@ type Request struct {
 
 type Capturer struct {
 	finder browserFinder
+	runner browserRunner
 }
 
 func NewCapturer() Capturer {
-	return Capturer{finder: defaultBrowserFinder()}
+	return Capturer{finder: defaultBrowserFinder(), runner: runBrowserCapture}
 }
 
 func ParseBrowser(raw string) (Browser, error) {

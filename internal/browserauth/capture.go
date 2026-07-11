@@ -7,14 +7,10 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/chromedp/cdproto/network"
-	"github.com/chromedp/chromedp"
 	"github.com/xiongnemo/globalprotect-socks5/internal/gp"
 )
-
-const defaultCaptureTimeout = 5 * time.Minute
 
 var errCaptureEventOverflow = errors.New("browserauth: capture event queue overflow")
 
@@ -51,37 +47,7 @@ func (c Capturer) Capture(ctx context.Context, request Request) (gp.AuthArtifact
 	if err != nil {
 		return gp.AuthArtifact{}, err
 	}
-	captureCtx, cancel := context.WithTimeout(ctx, captureTimeout(request.Timeout))
-	defer cancel()
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.ExecPath(browserPath),
-		chromedp.UserDataDir(profileDir),
-		chromedp.Flag("headless", false),
-	)
-	allocCtx, allocCancel := chromedp.NewExecAllocator(captureCtx, opts...)
-	defer allocCancel()
-	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
-	defer browserCancel()
-
-	events := make(chan responseEvent, 128)
-	results := make(chan captureResult, 1)
-	listenCtx, listenCancel := context.WithCancel(browserCtx)
-	defer listenCancel()
-	chromedp.ListenTarget(listenCtx, listenForResponses(events, results))
-	go collectArtifacts(listenCtx, browserCtx, events, results, readResponseBody)
-
-	if err := chromedp.Run(browserCtx, network.Enable(), chromedp.Navigate(target)); err != nil {
-		return gp.AuthArtifact{}, fmt.Errorf("start browser auth: %w", err)
-	}
-	select {
-	case result := <-results:
-		if result.err != nil {
-			return gp.AuthArtifact{}, result.err
-		}
-		return result.artifact, nil
-	case <-captureCtx.Done():
-		return gp.AuthArtifact{}, fmt.Errorf("capture auth artifact: %w", captureCtx.Err())
-	}
+	return c.runner(ctx, browserRunRequest{browserPath: browserPath, profileDir: profileDir, target: target, timeout: request.Timeout})
 }
 
 func listenForResponses(events chan<- responseEvent, results chan<- captureResult) func(any) {
@@ -259,11 +225,4 @@ func sendResult(ctx context.Context, results chan<- captureResult, result captur
 	case results <- result:
 	case <-ctx.Done():
 	}
-}
-
-func captureTimeout(timeout time.Duration) time.Duration {
-	if timeout > 0 {
-		return timeout
-	}
-	return defaultCaptureTimeout
 }
