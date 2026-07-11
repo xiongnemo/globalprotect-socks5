@@ -23,6 +23,7 @@ func (r Runner) auth(ctx context.Context, args []string) error {
 	hostID := flags.String("host-id", "gp-socks", "stable GlobalProtect host-id")
 	browserRaw := flags.String("browser", string(browserauth.BrowserAuto), "browser: auto, chrome, or edge")
 	browserPath := flags.String("browser-path", "", "explicit Chrome or Edge executable path")
+	browserProfileDir := flags.String("browser-profile-dir", "", "explicit persistent Chrome/Edge profile directory for browser SSO")
 	timeout := flags.Duration("timeout", defaultBrowserAuthTimeout, "maximum time to wait for browser SSO")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("parse auth flags: %w", err)
@@ -47,6 +48,7 @@ func (r Runner) auth(ctx context.Context, args []string) error {
 		Prelogin:    prelogin,
 		Browser:     browser,
 		BrowserPath: *browserPath,
+		ProfileDir:  *browserProfileDir,
 		Timeout:     *timeout,
 	})
 	if err != nil {
