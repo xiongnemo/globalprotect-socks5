@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func Test_NewClient_setsBoundedHTTPTimeout_whenHTTPClientMissing(t *testing.T) {
@@ -22,16 +24,40 @@ func Test_NewClient_setsBoundedHTTPTimeout_whenHTTPClientMissing(t *testing.T) {
 	}
 }
 
-func Test_NewClient_preservesHTTPClient_whenProvided(t *testing.T) {
+func Test_NewClient_copiesHTTPClient_withoutMutatingCaller(t *testing.T) {
 	// Given
-	httpClient := &http.Client{}
+	httpClient := &http.Client{Timeout: time.Second}
+
+	// When
+	client := NewClient(httpClient, ClientProfile{})
+	httpClient.Timeout = 2 * time.Second
+
+	// Then
+	if httpClient.Jar != nil {
+		t.Fatal("caller HTTP client Jar was mutated")
+	}
+	if client.httpClient.Timeout != time.Second {
+		t.Fatalf("client HTTP timeout = %s, want %s", client.httpClient.Timeout, time.Second)
+	}
+	if client.httpClient.Jar == nil {
+		t.Fatal("client HTTP Jar = nil, want private in-memory jar")
+	}
+}
+
+func Test_NewClient_preservesCallerSuppliedJar(t *testing.T) {
+	// Given
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New() error = %v", err)
+	}
+	httpClient := &http.Client{Jar: jar}
 
 	// When
 	client := NewClient(httpClient, ClientProfile{})
 
 	// Then
-	if client.httpClient != httpClient {
-		t.Fatal("NewClient replaced provided HTTP client")
+	if client.httpClient.Jar != jar {
+		t.Fatal("client HTTP Jar does not preserve caller-supplied jar")
 	}
 }
 
