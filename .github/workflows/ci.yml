@@ -1,0 +1,279 @@
+name: CI and Release
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        run: go test ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with race detector
+        run: go test -race -shuffle=on -count=1 ./...
+
+  version:
+    name: Calculate release version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out repository and tags
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test release version calculation
+        run: go test ./scripts/release-version -count=1
+
+      - name: Calculate release version
+        id: version
+        shell: bash
+        run: echo "version=$(go run ./scripts/release-version)" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
+    needs: version
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {goos: darwin, goarch: amd64, goarm: '', extension: ''}
+          - {goos: darwin, goarch: arm64, goarm: '', extension: ''}
+          - {goos: windows, goarch: '386', goarm: '', extension: .exe}
+          - {goos: windows, goarch: amd64, goarm: '', extension: .exe}
+          - {goos: windows, goarch: arm64, goarm: '', extension: .exe}
+          - {goos: linux, goarch: '386', goarm: '', extension: ''}
+          - {goos: linux, goarch: amd64, goarm: '', extension: ''}
+          - {goos: linux, goarch: arm, goarm: '7', extension: ''}
+          - {goos: linux, goarch: arm64, goarm: '', extension: ''}
+          - {goos: linux, goarch: loong64, goarm: '', extension: ''}
+          - {goos: linux, goarch: mips, goarm: '', extension: ''}
+          - {goos: linux, goarch: mips64, goarm: '', extension: ''}
+          - {goos: linux, goarch: mips64le, goarm: '', extension: ''}
+          - {goos: linux, goarch: mipsle, goarm: '', extension: ''}
+          - {goos: linux, goarch: ppc64, goarm: '', extension: ''}
+          - {goos: linux, goarch: ppc64le, goarm: '', extension: ''}
+          - {goos: linux, goarch: riscv64, goarm: '', extension: ''}
+          - {goos: linux, goarch: s390x, goarm: '', extension: ''}
+    env:
+      ASSET_NAME: gp-socks-${{ needs.version.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.extension }}
+      CGO_ENABLED: '0'
+      GOARCH: ${{ matrix.goarch }}
+      GOARM: ${{ matrix.goarm }}
+      GOOS: ${{ matrix.goos }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          go build -trimpath -o "dist/${ASSET_NAME}" ./cmd/gp-socks
+          test -s "dist/${ASSET_NAME}"
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ASSET_NAME }}
+          path: dist/${{ env.ASSET_NAME }}
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  release:
+    name: Publish prerelease
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    needs: [verify, version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Check out repository and tags
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Download binaries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: gp-socks-*
+          path: dist
+          merge-multiple: true
+
+      - name: Validate binaries and create checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$(cat <<EOF
+          gp-socks-${VERSION}-darwin-amd64
+          gp-socks-${VERSION}-darwin-arm64
+          gp-socks-${VERSION}-linux-386
+          gp-socks-${VERSION}-linux-amd64
+          gp-socks-${VERSION}-linux-arm
+          gp-socks-${VERSION}-linux-arm64
+          gp-socks-${VERSION}-linux-loong64
+          gp-socks-${VERSION}-linux-mips
+          gp-socks-${VERSION}-linux-mips64
+          gp-socks-${VERSION}-linux-mips64le
+          gp-socks-${VERSION}-linux-mipsle
+          gp-socks-${VERSION}-linux-ppc64
+          gp-socks-${VERSION}-linux-ppc64le
+          gp-socks-${VERSION}-linux-riscv64
+          gp-socks-${VERSION}-linux-s390x
+          gp-socks-${VERSION}-windows-386.exe
+          gp-socks-${VERSION}-windows-amd64.exe
+          gp-socks-${VERSION}-windows-arm64.exe
+          EOF
+          )
+          actual=$(find dist -maxdepth 1 -type f -printf '%f\n' | sort)
+          if [[ "$actual" != "$(printf '%s\n' "$expected" | sort)" ]]; then
+            diff -u <(printf '%s\n' "$expected" | sort) <(printf '%s\n' "$actual")
+            exit 1
+          fi
+          while IFS= read -r asset; do
+            test -s "dist/${asset}"
+          done <<< "$expected"
+          (cd dist && sha256sum gp-socks-* | sort -k2 > SHA256SUMS)
+
+      - name: Publish idempotent prerelease
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+
+          expected_assets=$(find dist -maxdepth 1 -type f -printf '%f\n' | sort)
+          tag_preexisting=false
+          if git show-ref --verify --quiet "refs/tags/${VERSION}"; then
+            tag_preexisting=true
+            if [[ "$(git rev-list -n 1 "${VERSION}")" != "${GITHUB_SHA}" ]]; then
+              echo "Tag ${VERSION} does not point to ${GITHUB_SHA}" >&2
+              exit 1
+            fi
+          fi
+
+          verify_assets() {
+            local actual_assets asset local_digest local_size metadata release_id remote_digest remote_size
+            release_id=$(gh release view "${VERSION}" --json databaseId --jq '.databaseId')
+            metadata=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" --jq '.[] | [.name, .size, .digest] | @tsv')
+            actual_assets=$(printf '%s\n' "$metadata" | cut -f1 | sort)
+            if [[ "$actual_assets" != "$expected_assets" ]]; then
+              diff -u <(printf '%s\n' "$expected_assets") <(printf '%s\n' "$actual_assets")
+              return 1
+            fi
+            while IFS= read -r asset; do
+              local_size=$(stat -c '%s' "dist/${asset}")
+              local_digest="sha256:$(sha256sum "dist/${asset}" | cut -d' ' -f1)"
+              IFS=$'\t' read -r remote_size remote_digest <<< "$(printf '%s\n' "$metadata" | awk -F '\t' -v name="$asset" '$1 == name { print $2 "\t" $3 }')"
+              if [[ "$remote_size" != "$local_size" ]] || [[ "$remote_digest" != "$local_digest" ]]; then
+                echo "Release asset ${asset} does not match the current build" >&2
+                return 1
+              fi
+            done <<< "$expected_assets"
+          }
+
+          verify_release() {
+            verify_assets
+            if [[ "$(gh release view "${VERSION}" --json isDraft --jq '.isDraft')" != "false" ]]; then
+              echo "Release ${VERSION} is still a draft" >&2
+              return 1
+            fi
+            if [[ "$(gh release view "${VERSION}" --json isPrerelease --jq '.isPrerelease')" != "true" ]]; then
+              echo "Release ${VERSION} is not a prerelease" >&2
+              return 1
+            fi
+            if [[ "$(gh release view "${VERSION}" --json assets --jq '[.assets[] | select(.size == 0)] | length')" != "0" ]]; then
+              echo "Release ${VERSION} contains an empty asset" >&2
+              return 1
+            fi
+          }
+
+          if gh release view "${VERSION}" >/dev/null 2>&1; then
+            if [[ "$tag_preexisting" != "true" ]]; then
+              echo "Release ${VERSION} exists without a fetched tag" >&2
+              exit 1
+            fi
+            verify_release
+            exit 0
+          fi
+
+          release_created=false
+          cleanup_draft() {
+            if [[ "$release_created" == "true" ]] && [[ "$(gh release view "${VERSION}" --json isDraft --jq '.isDraft' 2>/dev/null || true)" == "true" ]]; then
+              if [[ "$tag_preexisting" == "true" ]]; then
+                gh release delete "${VERSION}" --yes
+              else
+                gh release delete "${VERSION}" --yes --cleanup-tag
+              fi
+            fi
+          }
+          trap cleanup_draft ERR
+
+          create_args=("${VERSION}" --draft --prerelease --latest=false --generate-notes --title "${VERSION}")
+          if [[ "$tag_preexisting" == "true" ]]; then
+            create_args+=(--verify-tag)
+          else
+            create_args+=(--target "${GITHUB_SHA}")
+          fi
+          gh release create "${create_args[@]}"
+          release_created=true
+          gh release upload "${VERSION}" dist/*
+          verify_assets
+
+          gh release edit "${VERSION}" --draft=false --prerelease --latest=false
+          release_created=false
+          trap - ERR
+          git fetch --force --tags origin
+          if [[ "$(git rev-list -n 1 "${VERSION}")" != "${GITHUB_SHA}" ]]; then
+            echo "Published tag ${VERSION} does not point to ${GITHUB_SHA}" >&2
+            exit 1
+          fi
+          verify_release
