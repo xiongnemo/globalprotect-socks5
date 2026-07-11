@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -25,6 +24,7 @@ type IO struct {
 	Stderr       io.Writer
 	HTTPClient   *http.Client
 	AuthCapturer AuthCapturer
+	DialContext  socks5.DialFunc
 }
 
 type Runner struct {
@@ -40,6 +40,9 @@ func NewRunner(ioConfig IO) Runner {
 	}
 	if ioConfig.HTTPClient == nil {
 		ioConfig.HTTPClient = &http.Client{Timeout: defaultHTTPTimeout}
+	}
+	if ioConfig.DialContext == nil {
+		ioConfig.DialContext = dialContext
 	}
 	return Runner{io: ioConfig}
 }
@@ -119,31 +122,6 @@ func summarizeSSORequest(raw string) string {
 		return "<SAML POST HTML; rerun with --sso-file to save>"
 	}
 	return raw
-}
-
-func (r Runner) serve(ctx context.Context, args []string) error {
-	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
-	flags.SetOutput(r.io.Stderr)
-	listenAddr := flags.String("listen", "127.0.0.1:1080", "SOCKS5 listen address")
-	if err := flags.Parse(args); err != nil {
-		return fmt.Errorf("parse serve flags: %w", err)
-	}
-	listener, err := net.Listen("tcp", *listenAddr)
-	if err != nil {
-		return fmt.Errorf("listen %s: %w", *listenAddr, err)
-	}
-	defer listener.Close()
-	_, err = fmt.Fprintf(r.io.Stdout, "listening=%s\n", listener.Addr().String())
-	if err != nil {
-		return fmt.Errorf("write listen summary: %w", err)
-	}
-	server := socks5.NewServer(socks5.Config{DialContext: dialContext})
-	return server.Serve(ctx, listener)
-}
-
-func dialContext(ctx context.Context, network string, address string) (net.Conn, error) {
-	var dialer net.Dialer
-	return dialer.DialContext(ctx, network, address)
 }
 
 func (r Runner) usage() error {
