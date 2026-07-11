@@ -35,6 +35,7 @@ type serveTunnelOptions struct {
 	browser     browserauth.Browser
 	browserPath string
 	profileDir  string
+	clientOpts  []gp.ClientOption
 	timeout     time.Duration
 }
 
@@ -44,7 +45,7 @@ type serveAuthRequest struct {
 	options serveTunnelOptions
 }
 
-func (r Runner) serve(ctx context.Context, args []string) error {
+func (r Runner) serve(ctx context.Context, args []string) (err error) {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(r.io.Stderr)
 	listenAddr := flags.String("listen", "127.0.0.1:1080", "SOCKS5 listen address")
@@ -55,9 +56,15 @@ func (r Runner) serve(ctx context.Context, args []string) error {
 	browserPath := flags.String("browser-path", "", "explicit Chrome or Edge executable path")
 	browserProfileDir := flags.String("browser-profile-dir", "", "explicit persistent Chrome/Edge profile directory for browser SSO")
 	timeout := flags.Duration("timeout", defaultBrowserAuthTimeout, "maximum time to wait for browser SSO")
+	debugLogPath := flags.String("debug-log", "", "write redacted GlobalProtect HTTP debug JSONL to this file")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("parse serve flags: %w", err)
 	}
+	debugLog, clientOptions, err := openDebugLog(*debugLogPath)
+	if err != nil {
+		return err
+	}
+	defer closeDebugLog(debugLog, *debugLogPath, &err)
 	browser, err := browserauth.ParseBrowser(*browserRaw)
 	if err != nil {
 		return err
@@ -71,6 +78,7 @@ func (r Runner) serve(ctx context.Context, args []string) error {
 			browser:     browser,
 			browserPath: *browserPath,
 			profileDir:  *browserProfileDir,
+			clientOpts:  clientOptions,
 			timeout:     *timeout,
 		})
 		if err != nil {
@@ -84,7 +92,8 @@ func (r Runner) serve(ctx context.Context, args []string) error {
 		return fmt.Errorf("listen %s: %w", *listenAddr, err)
 	}
 	defer listener.Close()
-	if _, err := fmt.Fprintf(r.io.Stdout, "listening=%s\n", listener.Addr().String()); err != nil {
+	_, err = fmt.Fprintf(r.io.Stdout, "listening=%s\n", listener.Addr().String())
+	if err != nil {
 		return fmt.Errorf("write listen summary: %w", err)
 	}
 	server := socks5.NewServer(socks5.Config{DialContext: dial})
@@ -96,7 +105,7 @@ func (r Runner) newTunnelDialer(ctx context.Context, options serveTunnelOptions)
 	if err != nil {
 		return nil, fmt.Errorf("portal: %w", err)
 	}
-	client := gp.NewClient(r.io.HTTPClient, gp.ClientProfile{HostID: options.hostID, Computer: "gp-socks", ClientOS: gp.ClientOSLinux})
+	client := gp.NewClient(r.io.HTTPClient, gp.ClientProfile{HostID: options.hostID, Computer: "gp-socks", ClientOS: gp.ClientOSLinux}, options.clientOpts...)
 	artifact, err := r.captureServeArtifact(ctx, serveAuthRequest{client: client, portal: portal, options: options})
 	if err != nil {
 		return nil, err
