@@ -24,10 +24,10 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: true
@@ -48,13 +48,13 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - name: Check out repository and tags
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
           fetch-tags: true
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: true
@@ -108,10 +108,10 @@ jobs:
       GOOS: ${{ matrix.goos }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: true
@@ -124,7 +124,7 @@ jobs:
           test -s "dist/${ASSET_NAME}"
 
       - name: Upload binary
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ env.ASSET_NAME }}
           path: dist/${{ env.ASSET_NAME }}
@@ -144,17 +144,18 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
       - name: Check out repository and tags
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
           fetch-tags: true
 
       - name: Download binaries
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: gp-socks-*
           path: dist
           merge-multiple: true
+          digest-mismatch: error
 
       - name: Validate binaries and create checksums
         shell: bash
@@ -198,6 +199,26 @@ jobs:
           git fetch --force --tags origin
 
           expected_assets=$(find dist -maxdepth 1 -type f -printf '%f\n' | sort)
+
+          matching_drafts() {
+            gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" |
+              jq -c --arg version "${VERSION}" 'add | map(select(.draft == true and .tag_name == $version))'
+          }
+
+          drafts=$(matching_drafts)
+          draft_count=$(jq 'length' <<< "$drafts")
+          if [[ "$draft_count" -gt 1 ]]; then
+            echo "Multiple draft releases exist for ${VERSION}; refusing automatic recovery" >&2
+            jq -r '.[] | [.id, .tag_name, .target_commitish, .created_at] | @tsv' <<< "$drafts" >&2
+            exit 1
+          fi
+          if [[ "$draft_count" -eq 1 ]]; then
+            stale_draft_id=$(jq -r '.[0].id' <<< "$drafts")
+            echo "Deleting interrupted draft release ${stale_draft_id} for ${VERSION}"
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${stale_draft_id}"
+            git fetch --force --tags origin
+          fi
+
           tag_preexisting=false
           if git show-ref --verify --quiet "refs/tags/${VERSION}"; then
             tag_preexisting=true
@@ -208,9 +229,9 @@ jobs:
           fi
 
           verify_assets() {
-            local actual_assets asset local_digest local_size metadata release_id remote_digest remote_size
+            local actual_assets asset local_digest local_size metadata release_id remote_digest remote_size remote_state
             release_id=$(gh release view "${VERSION}" --json databaseId --jq '.databaseId')
-            metadata=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" --jq '.[] | [.name, .size, .digest] | @tsv')
+            metadata=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" --jq '.[] | [.name, .size, .state, (.digest // "")] | @tsv')
             actual_assets=$(printf '%s\n' "$metadata" | cut -f1 | sort)
             if [[ "$actual_assets" != "$expected_assets" ]]; then
               diff -u <(printf '%s\n' "$expected_assets") <(printf '%s\n' "$actual_assets")
@@ -219,8 +240,8 @@ jobs:
             while IFS= read -r asset; do
               local_size=$(stat -c '%s' "dist/${asset}")
               local_digest="sha256:$(sha256sum "dist/${asset}" | cut -d' ' -f1)"
-              IFS=$'\t' read -r remote_size remote_digest <<< "$(printf '%s\n' "$metadata" | awk -F '\t' -v name="$asset" '$1 == name { print $2 "\t" $3 }')"
-              if [[ "$remote_size" != "$local_size" ]] || [[ "$remote_digest" != "$local_digest" ]]; then
+              IFS=$'\t' read -r remote_size remote_state remote_digest <<< "$(printf '%s\n' "$metadata" | awk -F '\t' -v name="$asset" '$1 == name { print $2 "\t" $3 "\t" $4 }')"
+              if [[ "$remote_state" != "uploaded" ]] || [[ ! "$remote_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || [[ "$remote_size" != "$local_size" ]] || [[ "$remote_digest" != "$local_digest" ]]; then
                 echo "Release asset ${asset} does not match the current build" >&2
                 return 1
               fi
@@ -254,15 +275,26 @@ jobs:
 
           release_created=false
           cleanup_draft() {
-            if [[ "$release_created" == "true" ]] && [[ "$(gh release view "${VERSION}" --json isDraft --jq '.isDraft' 2>/dev/null || true)" == "true" ]]; then
-              if [[ "$tag_preexisting" == "true" ]]; then
-                gh release delete "${VERSION}" --yes
-              else
-                gh release delete "${VERSION}" --yes --cleanup-tag
+            if [[ "$release_created" == "true" ]]; then
+              local cleanup_count cleanup_drafts cleanup_id
+              cleanup_drafts=$(matching_drafts)
+              cleanup_count=$(jq 'length' <<< "$cleanup_drafts")
+              if [[ "$cleanup_count" -eq 1 ]]; then
+                cleanup_id=$(jq -r '.[0].id' <<< "$cleanup_drafts")
+                gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${cleanup_id}"
+              elif [[ "$cleanup_count" -gt 1 ]]; then
+                echo "Multiple draft releases exist for ${VERSION}; refusing cleanup" >&2
+                return 1
               fi
             fi
           }
-          trap cleanup_draft ERR
+          on_error() {
+            local status=$?
+            trap - ERR
+            cleanup_draft || echo "Draft cleanup failed; the next run will retry ID-based recovery" >&2
+            exit "$status"
+          }
+          trap on_error ERR
 
           create_args=("${VERSION}" --draft --prerelease --latest=false --generate-notes --title "${VERSION}")
           if [[ "$tag_preexisting" == "true" ]]; then
