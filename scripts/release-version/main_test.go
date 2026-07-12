@@ -43,6 +43,25 @@ func TestVersionFromRepository_incrementsPatchByCommits_sinceReleaseTag(t *testi
 	}
 }
 
+func TestVersionFromRepository_incrementsPatchOnFirstCommit_afterReleaseTag(t *testing.T) {
+	// Given
+	repository := newTestRepository(t)
+	commitTestRepository(t, repository, 1)
+	runGit(t, repository, "tag", "v0.0.1")
+	commitTestRepository(t, repository, 1)
+
+	// When
+	version, err := versionFromRepository(context.Background(), repository)
+
+	// Then
+	if err != nil {
+		t.Fatalf("versionFromRepository() error = %v", err)
+	}
+	if version != "v0.0.2" {
+		t.Fatalf("versionFromRepository() = %q, want v0.0.2", version)
+	}
+}
+
 func TestVersionFromRepository_keepsVersion_withoutNewCommit(t *testing.T) {
 	// Given
 	repository := newTestRepository(t)
