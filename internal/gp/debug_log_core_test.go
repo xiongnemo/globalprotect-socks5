@@ -1,6 +1,7 @@
 package gp
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -23,5 +24,23 @@ func Test_RedactedSnippet_redactsSensitiveAssignmentsBeforeTruncating(t *testing
 	}
 	if len(snippet) > debugResponseSnippetBytes {
 		t.Fatalf("snippet length = %d, want <= %d", len(snippet), debugResponseSnippetBytes)
+	}
+}
+
+func Test_RedactedSnippet_redactsEncodedSensitiveRequestValuesInGenericText(t *testing.T) {
+	// Given
+	secret := `secret+cookie&<value>`
+	values := sensitiveFormValues(url.Values{"prelogin-cookie": {secret}})
+	body := []byte(`generic raw ` + secret + ` encoded ` + url.QueryEscape(secret) + ` html secret+cookie&amp;&lt;value&gt;`)
+
+	// When
+	snippet := redactedSnippet(body, values...)
+
+	// Then
+	if strings.Contains(snippet, "secret+cookie") || strings.Contains(snippet, "secret%2Bcookie") {
+		t.Fatalf("snippet leaked encoded request secret: %q", snippet)
+	}
+	if !strings.Contains(snippet, redactedValue) {
+		t.Fatalf("snippet = %q, want redaction marker", snippet)
 	}
 }

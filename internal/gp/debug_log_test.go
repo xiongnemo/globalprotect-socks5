@@ -20,7 +20,7 @@ func Test_Client_GatewayLogin_writesRedactedDebugEvent_whenGatewayRejectsLogin(t
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(512)
-		_, _ = w.Write([]byte(`<response><error>gateway rejected login</error><prelogin-cookie>pre-cookie</prelogin-cookie><saml-request>secret-saml-request</saml-request><input name="password" value="secret-password"><message>diagnostic</message></response>`))
+		_, _ = w.Write([]byte(`<response><error>gateway rejected login</error><prelogin-cookie>pre-cookie</prelogin-cookie><saml-request>secret-saml-request</saml-request><input name="password" value="secret-password"><message>diagnostic pre-cookie</message></response>`))
 	}))
 	defer server.Close()
 	portal := mustPortalURLInternal(t, server.URL)

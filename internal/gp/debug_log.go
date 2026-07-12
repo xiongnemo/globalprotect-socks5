@@ -3,6 +3,7 @@ package gp
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -39,6 +40,7 @@ type debugHTTPEvent struct {
 	Status             int      `json:"status,omitempty"`
 	ResponseSnippet    string   `json:"response_snippet,omitempty"`
 	TransportSucceeded bool     `json:"transport_succeeded"`
+	sensitiveValues    []string `json:"-"`
 }
 
 func WithDebugLog(w io.Writer) ClientOption {
@@ -55,6 +57,7 @@ func newDebugHTTPEvent(stage string, req *http.Request, form url.Values) debugHT
 		Method:            req.Method,
 		Path:              req.URL.Path,
 		RequestFormFields: sortedFormFields(form),
+		sensitiveValues:   sensitiveFormValues(form),
 	}
 }
 
@@ -71,7 +74,7 @@ func (e debugHTTPEvent) withStatus(status int) debugHTTPEvent {
 func (e debugHTTPEvent) withResponse(status int, body []byte) debugHTTPEvent {
 	e.Status = status
 	if status < 200 || status >= 300 {
-		e.ResponseSnippet = redactedSnippet(body)
+		e.ResponseSnippet = redactedSnippet(body, e.sensitiveValues...)
 	}
 	e.TransportSucceeded = true
 	return e
@@ -109,8 +112,11 @@ func sortedFormFields(form url.Values) []string {
 	return fields
 }
 
-func redactedSnippet(body []byte) string {
+func redactedSnippet(body []byte, sensitiveValues ...string) string {
 	redacted := redactSensitiveContent(string(body))
+	for _, value := range sensitiveValues {
+		redacted = strings.ReplaceAll(redacted, value, redactedValue)
+	}
 	if len(redacted) <= debugResponseSnippetBytes {
 		return redacted
 	}
@@ -119,6 +125,38 @@ func redactedSnippet(body []byte) string {
 		snippet = snippet[:len(snippet)-1]
 	}
 	return snippet
+}
+
+func sensitiveFormValues(form url.Values) []string {
+	unique := make(map[string]struct{})
+	for field, values := range form {
+		if !isSensitiveName(field) {
+			continue
+		}
+		for _, value := range values {
+			if !isSecretValue(value) {
+				continue
+			}
+			for _, variant := range []string{value, url.QueryEscape(value), html.EscapeString(value)} {
+				unique[variant] = struct{}{}
+			}
+		}
+	}
+	redactions := make([]string, 0, len(unique))
+	for value := range unique {
+		redactions = append(redactions, value)
+	}
+	sort.Slice(redactions, func(i, j int) bool { return len(redactions[i]) > len(redactions[j]) })
+	return redactions
+}
+
+func isSecretValue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "0", "empty", "(null)", "-1":
+		return false
+	default:
+		return true
+	}
 }
 
 func redactSensitiveContent(raw string) string {
@@ -185,7 +223,7 @@ func tagName(raw string) string {
 
 func isSensitiveName(name string) bool {
 	lower := strings.ToLower(name)
-	for _, marker := range []string{"token", "cookie", "auth", "saml", "assertion", "secret", "password", "authorization"} {
+	for _, marker := range []string{"token", "cookie", "auth", "saml", "assertion", "secret", "password", "passwd", "authorization"} {
 		if strings.Contains(lower, marker) {
 			return true
 		}
