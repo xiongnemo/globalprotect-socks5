@@ -20,10 +20,10 @@ const (
 )
 
 var (
-	jsonSensitiveValueRe = regexp.MustCompile(`(?i)("[^"]*(token|cookie|auth|saml|assertion|secret|password|authorization)[^"]*"\s*:\s*)"([^"\\]|\\.)*"`)
-	formSensitiveValueRe = regexp.MustCompile(`(?i)(^|[?&\s;])([^=?&\s;<>"']*(token|cookie|auth|saml|assertion|secret|password|authorization)[^=?&\s;<>"']*\s*=\s*)("[^"]*"|'[^']*'|[^&\s;<>"']*)`)
-	inputNameValueRe     = regexp.MustCompile(`(?is)(<input\b[^>]*\bname\s*=\s*["'][^"']*(token|cookie|auth|saml|assertion|secret|password|authorization)[^"']*["'][^>]*\bvalue\s*=\s*["'])[^"']*`)
-	inputValueNameRe     = regexp.MustCompile(`(?is)(<input\b[^>]*\bvalue\s*=\s*["'])[^"']*(["'][^>]*\bname\s*=\s*["'][^"']*(token|cookie|auth|saml|assertion|secret|password|authorization)[^"']*["'])`)
+	jsonSensitiveValueRe = regexp.MustCompile(`(?i)("[^"]*(token|cookie|auth|saml|assertion|secret|password|passwd|authorization)[^"]*"\s*:\s*)"([^"\\]|\\.)*"`)
+	formSensitiveValueRe = regexp.MustCompile(`(?i)(^|[?&\s;])([^=?&\s;<>"']*(token|cookie|auth|saml|assertion|secret|password|passwd|authorization)[^=?&\s;<>"']*\s*=\s*)("[^"]*"|'[^']*'|[^&\s;<>"']*)`)
+	inputNameValueRe     = regexp.MustCompile(`(?is)(<input\b[^>]*\bname\s*=\s*["'][^"']*(token|cookie|auth|saml|assertion|secret|password|passwd|authorization)[^"']*["'][^>]*\bvalue\s*=\s*["'])[^"']*`)
+	inputValueNameRe     = regexp.MustCompile(`(?is)(<input\b[^>]*\bvalue\s*=\s*["'])[^"']*(["'][^>]*\bname\s*=\s*["'][^"']*(token|cookie|auth|saml|assertion|secret|password|passwd|authorization)[^"']*["'])`)
 	bearerValueRe        = regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+`)
 )
 
@@ -160,7 +160,8 @@ func isSecretValue(value string) bool {
 }
 
 func redactSensitiveContent(raw string) string {
-	redacted := redactSensitiveAssignments(raw)
+	redacted := redactSensitiveTagAttributes(raw)
+	redacted = redactSensitiveAssignments(redacted)
 	searchAt := 0
 	for {
 		start, end, ok := nextSensitiveTag(redacted, searchAt)

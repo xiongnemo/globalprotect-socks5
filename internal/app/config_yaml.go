@@ -77,6 +77,20 @@ func decodeServeNode(node *yaml.Node, patch *servePatch) error {
 			return decodeString(value, key, &patch.Portal)
 		case "gateway":
 			return decodeString(value, key, &patch.Gateway)
+		case "dns_mode":
+			return decodeString(value, key, &patch.DNSMode)
+		case "dns_servers":
+			return decodeString(value, key, &patch.DNSServers)
+		case "socks_username":
+			return decodeString(value, key, &patch.SOCKSUsername)
+		case "socks_password":
+			return decodeString(value, key, &patch.SOCKSPassword)
+		case "handshake_timeout":
+			return decodeString(value, key, &patch.HandshakeTimeout)
+		case "connect_timeout":
+			return decodeString(value, key, &patch.ConnectTimeout)
+		case "max_connections":
+			return decodeString(value, key, &patch.MaxConnections)
 		case "host_id":
 			return decodeString(value, key, &patch.HostID)
 		case "browser":

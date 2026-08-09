@@ -19,8 +19,15 @@ auth:
 
 serve:
   listen: "127.0.0.1:1080"
+  socks_username: ""
+  socks_password: ""
+  handshake_timeout: "10s"
+  connect_timeout: "30s"
+  max_connections: "256"
   portal: ""
   gateway: ""
+  dns_mode: "vpn"
+  dns_servers: ""
   host_id: "gp-socks"
   browser: "auto"
   browser_path: ""

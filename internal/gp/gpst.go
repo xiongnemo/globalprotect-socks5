@@ -9,12 +9,15 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"sync"
 	"time"
 )
 
 var (
 	ErrInvalidGPSTFrame     = errors.New("gp: invalid gpst frame")
 	ErrInvalidGPSTHandshake = errors.New("gp: invalid gpst handshake")
+	ErrGPSTDeadPeer         = errors.New("gp: gpst dead peer")
+	ErrGPSTRekeyDue         = errors.New("gp: gpst rekey due")
 )
 
 const (
@@ -30,7 +33,37 @@ var gpstControlHeader = [8]byte{}
 var gpstFixedHeader = [8]byte{0x01, 0, 0, 0, 0, 0, 0, 0}
 
 type SSLPacketTunnel struct {
-	conn net.Conn
+	conn      net.Conn
+	ctx       context.Context
+	cancel    context.CancelFunc
+	writeLock chan struct{}
+	stateMu   sync.Mutex
+	lastRx    time.Time
+	lastTx    time.Time
+	dpdSent   time.Time
+	terminal  error
+	options   gpstRuntimeOptions
+	started   time.Time
+	stopOnce  sync.Once
+	closeErr  error
+	wg        sync.WaitGroup
+}
+
+type gpstRuntimeOptions struct {
+	handshakeTimeout time.Duration
+	dpdInterval      time.Duration
+	dpdTimeout       time.Duration
+	writeTimeout     time.Duration
+	rekeyAfter       time.Duration
+}
+
+func defaultGPSTRuntimeOptions() gpstRuntimeOptions {
+	return gpstRuntimeOptions{
+		handshakeTimeout: 30 * time.Second,
+		dpdInterval:      10 * time.Second,
+		dpdTimeout:       20 * time.Second,
+		writeTimeout:     10 * time.Second,
+	}
 }
 
 func EncodeGPSTFrame(packet []byte) ([]byte, error) {
@@ -54,31 +87,17 @@ func DecodeGPSTFrame(r io.Reader) ([]byte, error) {
 	return decodeGPSTPayload(r, header)
 }
 
-func NewSSLPacketTunnel(ctx context.Context, conn net.Conn, session GatewaySession, config TunnelConfig) (*SSLPacketTunnel, error) {
-	request, err := sslTunnelRequest(session, config)
-	if err != nil {
-		return nil, err
-	}
-	if err := writeAllContext(ctx, conn, []byte(request)); err != nil {
-		return nil, fmt.Errorf("write tunnel request: %w", err)
-	}
-	marker := make([]byte, len(gpstStartTunnel))
-	if err := readFullContext(ctx, conn, marker); err != nil {
-		return nil, fmt.Errorf("read tunnel marker: %w", err)
-	}
-	if string(marker) != gpstStartTunnel {
-		return nil, fmt.Errorf("tunnel marker %q: %w", string(marker), ErrInvalidGPSTHandshake)
-	}
-	return &SSLPacketTunnel{conn: conn}, nil
-}
-
 func (t *SSLPacketTunnel) ReadPacket(ctx context.Context) ([]byte, error) {
 	reader := contextReader{ctx: ctx, conn: t.conn}
 	for {
 		header := make([]byte, gpstHeaderLen)
 		if err := readFullContext(ctx, t.conn, header); err != nil {
+			if stopped := t.stoppedError(ctx); stopped != nil {
+				return nil, stopped
+			}
 			return nil, fmt.Errorf("read gpst header: %w", err)
 		}
+		t.markReceived()
 		packet, data, err := readGPSTPacket(reader, header)
 		if err != nil {
 			return nil, err
@@ -94,17 +113,16 @@ func (t *SSLPacketTunnel) WritePacket(ctx context.Context, packet []byte) error 
 	if err != nil {
 		return err
 	}
-	if err := writeAllContext(ctx, t.conn, frame); err != nil {
+	if err := t.writeFrame(ctx, frame); err != nil {
 		return fmt.Errorf("write gpst packet: %w", err)
 	}
 	return nil
 }
 
 func (t *SSLPacketTunnel) Close() error {
-	if err := t.conn.Close(); err != nil {
-		return fmt.Errorf("close ssl packet tunnel: %w", err)
-	}
-	return nil
+	t.stop(nil)
+	t.wg.Wait()
+	return t.closeErr
 }
 
 func decodeGPSTPayload(r io.Reader, header []byte) ([]byte, error) {
@@ -162,68 +180,4 @@ func sslTunnelRequest(session GatewaySession, config TunnelConfig) (string, erro
 	query.Set("user", session.User)
 	query.Set("authcookie", session.AuthCookie.String())
 	return fmt.Sprintf("GET %s?%s HTTP/1.1\r\n\r\n", config.SSLTunnelURL, query.Encode()), nil
-}
-
-type contextReader struct {
-	ctx  context.Context
-	conn net.Conn
-}
-
-func (r contextReader) Read(buf []byte) (int, error) {
-	if err := readContext(r.ctx, r.conn, buf); err != nil {
-		return 0, err
-	}
-	return len(buf), nil
-}
-
-func readFullContext(ctx context.Context, conn net.Conn, buf []byte) error {
-	stop := make(chan struct{})
-	go setDeadlineOnCancel(ctx, conn.SetReadDeadline, stop)
-	_, err := io.ReadFull(conn, buf)
-	close(stop)
-	if resetErr := conn.SetReadDeadline(time.Time{}); resetErr != nil && err == nil {
-		return fmt.Errorf("reset read deadline: %w", resetErr)
-	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return ctxErr
-	}
-	if err != nil {
-		return fmt.Errorf("read from tunnel: %w", err)
-	}
-	return nil
-}
-
-func readContext(ctx context.Context, conn net.Conn, buf []byte) error {
-	return readFullContext(ctx, conn, buf)
-}
-
-func writeAllContext(ctx context.Context, conn net.Conn, data []byte) error {
-	for len(data) > 0 {
-		stop := make(chan struct{})
-		go setDeadlineOnCancel(ctx, conn.SetWriteDeadline, stop)
-		n, err := conn.Write(data)
-		close(stop)
-		if resetErr := conn.SetWriteDeadline(time.Time{}); resetErr != nil && err == nil {
-			return fmt.Errorf("reset write deadline: %w", resetErr)
-		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		if err != nil {
-			return fmt.Errorf("write to tunnel: %w", err)
-		}
-		data = data[n:]
-	}
-	return nil
-}
-
-func setDeadlineOnCancel(ctx context.Context, setDeadline func(time.Time) error, stop <-chan struct{}) {
-	select {
-	case <-ctx.Done():
-		if err := setDeadline(time.Now()); err != nil {
-			return
-		}
-	case <-stop:
-		return
-	}
 }

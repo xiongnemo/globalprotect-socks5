@@ -63,3 +63,38 @@ func Test_Run_rejectsBlankFinalServeListen_beforeSideEffects(t *testing.T) {
 		})
 	}
 }
+
+func Test_Run_rejectsUnsafeNonLoopbackListen_beforeSideEffects(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "missing explicit opt-in",
+			args: []string{
+				"serve", "--portal", "https://portal.example.test", "--listen", "0.0.0.0:1080",
+			},
+		},
+		{
+			name: "missing authentication",
+			args: []string{
+				"serve", "--portal", "https://portal.example.test", "--listen", "0.0.0.0:1080",
+				"--allow-non-loopback",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			effects := &serveSideEffects{}
+			runner := effects.runner(func(string) (string, bool) { return "", false })
+			err := runner.Run(context.Background(), test.args)
+			if err == nil {
+				t.Fatal("Run() error = nil, want non-loopback policy rejection")
+			}
+			if errors.Is(err, errUnexpectedServeSideEffect) {
+				t.Error("Run() reached a runtime collaborator before listen policy validation")
+			}
+			effects.assertCollaboratorsIdle(t)
+		})
+	}
+}

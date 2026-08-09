@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/xiongnemo/globalprotect-socks5/internal/gp"
 )
@@ -51,7 +52,9 @@ func Test_Client_GatewayConfig_returnsTunnelConfig_whenGatewayProvidesSSLConfig(
 			`<ip-address>10.41.0.12</ip-address>` +
 			`<netmask>255.255.255.255</netmask>` +
 			`<ssl-tunnel-url>/ssl-tunnel-connect.sslvpn</ssl-tunnel-url>` +
+			`<mtu>1420</mtu><lifetime>7200</lifetime><timeout>3600</timeout>` +
 			`<dns><member>10.41.0.1</member><member>10.41.0.2</member></dns>` +
+			`<dns-suffix><member>monash.edu</member><member> corp.example </member></dns-suffix>` +
 			`<access-routes><member>10.0.0.0/8</member></access-routes>` +
 			`<exclude-access-routes><member>10.99.0.0/16</member></exclude-access-routes>` +
 			`</result></response>`))
@@ -73,8 +76,14 @@ func Test_Client_GatewayConfig_returnsTunnelConfig_whenGatewayProvidesSSLConfig(
 	if config.SSLTunnelURL != "/ssl-tunnel-connect.sslvpn" {
 		t.Fatalf("SSLTunnelURL = %q, want /ssl-tunnel-connect.sslvpn", config.SSLTunnelURL)
 	}
+	if config.MTU != 1420 || config.AuthLifetime != 2*time.Hour || config.RekeyAfter != 59*time.Minute {
+		t.Fatalf("lifecycle = mtu %d lifetime %s rekey %s", config.MTU, config.AuthLifetime, config.RekeyAfter)
+	}
 	if len(config.DNS) != 2 || config.DNS[0].String() != "10.41.0.1" {
 		t.Fatalf("DNS = %#v, want two DNS servers", config.DNS)
+	}
+	if len(config.DNSSuffixes) != 2 || config.DNSSuffixes[0] != "monash.edu" || config.DNSSuffixes[1] != "corp.example" {
+		t.Fatalf("DNSSuffixes = %#v, want trimmed gateway suffixes", config.DNSSuffixes)
 	}
 	if len(config.IncludeRoutes) != 1 || config.IncludeRoutes[0].String() != "10.0.0.0/8" {
 		t.Fatalf("IncludeRoutes = %#v, want 10.0.0.0/8", config.IncludeRoutes)
@@ -96,6 +105,7 @@ func Test_Client_GatewayConfig_returnsTunnelConfig_whenGatewayProvidesDirectSSLC
 			`<ip-address>10.41.0.12</ip-address>` +
 			`<ssl-tunnel-url>/ssl-tunnel-connect.sslvpn</ssl-tunnel-url>` +
 			`<dns><member>10.41.0.1</member></dns>` +
+			`<dns-suffix><member>monash.edu</member></dns-suffix>` +
 			`<access-routes><member>10.0.0.0/8</member></access-routes>` +
 			`</response>`))
 	}))
@@ -115,6 +125,9 @@ func Test_Client_GatewayConfig_returnsTunnelConfig_whenGatewayProvidesDirectSSLC
 	}
 	if config.SSLTunnelURL != "/ssl-tunnel-connect.sslvpn" {
 		t.Fatalf("SSLTunnelURL = %q, want /ssl-tunnel-connect.sslvpn", config.SSLTunnelURL)
+	}
+	if len(config.DNSSuffixes) != 1 || config.DNSSuffixes[0] != "monash.edu" {
+		t.Fatalf("DNSSuffixes = %#v, want direct gateway suffix", config.DNSSuffixes)
 	}
 	if len(config.IncludeRoutes) != 1 || config.IncludeRoutes[0].String() != "10.0.0.0/8" {
 		t.Fatalf("IncludeRoutes = %#v, want 10.0.0.0/8", config.IncludeRoutes)

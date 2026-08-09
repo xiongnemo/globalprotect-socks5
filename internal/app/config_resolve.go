@@ -28,6 +28,7 @@ func resolveRawInvocation(cli cliInvocation, file fileConfig, lookupEnv lookupEn
 		resolved.auth = mergeAuth(defaults.auth, file.Auth, environment.auth, cli.auth)
 	case commandServe:
 		resolved.serve = mergeServe(defaults.serve, file.Serve, environment.serve, cli.serve)
+		resolved.allowNonLoopback = cli.allowNonLoopback
 		if strings.TrimSpace(resolved.serve.Portal.value) == "" {
 			lowerPortalNonblank := strings.TrimSpace(defaults.serve.Portal.value) != "" ||
 				file.Serve.Portal.present && strings.TrimSpace(file.Serve.Portal.value) != ""

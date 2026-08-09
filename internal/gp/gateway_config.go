@@ -5,12 +5,17 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
+	"time"
 )
 
 type TunnelConfig struct {
 	IP            netip.Addr
 	SSLTunnelURL  string
+	MTU           uint32
+	AuthLifetime  time.Duration
+	RekeyAfter    time.Duration
 	DNS           []netip.Addr
+	DNSSuffixes   []string
 	IncludeRoutes []netip.Prefix
 	ExcludeRoutes []netip.Prefix
 }

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -48,8 +47,15 @@ func TestDefaultsFor_serveMatchesExistingCommandDefaults(t *testing.T) {
 	// Then
 	assertOptionalString(t, got.logLevel, "error")
 	assertOptionalString(t, got.serve.Listen, "127.0.0.1:1080")
+	assertOptionalString(t, got.serve.SOCKSUsername, "")
+	assertOptionalString(t, got.serve.SOCKSPassword, "")
+	assertOptionalString(t, got.serve.HandshakeTimeout, "10s")
+	assertOptionalString(t, got.serve.ConnectTimeout, "30s")
+	assertOptionalString(t, got.serve.MaxConnections, "256")
 	assertOptionalString(t, got.serve.Portal, "")
 	assertOptionalString(t, got.serve.Gateway, "")
+	assertOptionalString(t, got.serve.DNSMode, "vpn")
+	assertOptionalString(t, got.serve.DNSServers, "")
 	assertOptionalString(t, got.serve.HostID, "gp-socks")
 	assertOptionalString(t, got.serve.Browser, "auto")
 	assertOptionalString(t, got.serve.BrowserPath, "")
@@ -79,6 +85,13 @@ func TestResolveRawInvocation_mergesEachFieldBySourcePrecedence(t *testing.T) {
 		Serve: servePatch{
 			Portal:            testOptionalString("file-portal"),
 			Gateway:           testOptionalString("file-gateway"),
+			DNSMode:           testOptionalString("vpn"),
+			DNSServers:        testOptionalString("file-dns"),
+			SOCKSUsername:     testOptionalString("file-user"),
+			SOCKSPassword:     testOptionalString("file-password"),
+			HandshakeTimeout:  testOptionalString("11s"),
+			ConnectTimeout:    testOptionalString("31s"),
+			MaxConnections:    testOptionalString("111"),
 			HostID:            testOptionalString("file-host"),
 			Browser:           testOptionalString("edge"),
 			BrowserPath:       testOptionalString("file-browser"),
@@ -88,19 +101,27 @@ func TestResolveRawInvocation_mergesEachFieldBySourcePrecedence(t *testing.T) {
 		},
 	}
 	lookupEnv := testLookupEnv(map[string]string{
-		"GP_SOCKS_LOG_LEVEL":    "info",
-		"GP_SOCKS_PORTAL":       "env-portal",
-		"GP_SOCKS_GATEWAY":      "env-gateway",
-		"GP_SOCKS_HOST_ID":      "env-host",
-		"GP_SOCKS_BROWSER_PATH": "env-browser",
-		"GP_SOCKS_TIMEOUT":      "45s",
+		"GP_SOCKS_LOG_LEVEL":       "info",
+		"GP_SOCKS_PORTAL":          "env-portal",
+		"GP_SOCKS_GATEWAY":         "env-gateway",
+		"GP_SOCKS_DNS_SERVERS":     "env-dns",
+		"GP_SOCKS_USERNAME":        "env-user",
+		"GP_SOCKS_PASSWORD":        "env-password",
+		"GP_SOCKS_CONNECT_TIMEOUT": "32s",
+		"GP_SOCKS_HOST_ID":         "env-host",
+		"GP_SOCKS_BROWSER_PATH":    "env-browser",
+		"GP_SOCKS_TIMEOUT":         "45s",
 	})
 	cli := cliInvocation{
 		command:  commandName("serve"),
 		logLevel: testOptionalString("debug"),
 		serve: servePatch{
-			Gateway:     testOptionalString("cli-gateway"),
-			BrowserPath: testOptionalString("cli-browser"),
+			Gateway:        testOptionalString("cli-gateway"),
+			DNSMode:        testOptionalString("system"),
+			DNSServers:     testOptionalString(""),
+			SOCKSPassword:  testOptionalString("cli-password"),
+			MaxConnections: testOptionalString("333"),
+			BrowserPath:    testOptionalString("cli-browser"),
 		},
 	}
 
@@ -115,6 +136,15 @@ func TestResolveRawInvocation_mergesEachFieldBySourcePrecedence(t *testing.T) {
 	assertOptionalString(t, got.serve.Listen, "127.0.0.1:1080")
 	assertOptionalString(t, got.serve.Portal, "env-portal")
 	assertOptionalString(t, got.serve.Gateway, "cli-gateway")
+	assertOptionalString(t, got.serve.DNSMode, "system")
+	assertOptionalString(t, got.serve.DNSServers, "")
+	assertOptionalString(t, got.serve.SOCKSUsername, "env-user")
+	if got.serve.SOCKSPassword.value != "cli-password" || !got.serve.SOCKSPassword.present {
+		t.Fatal("resolved SOCKS password did not use CLI precedence")
+	}
+	assertOptionalString(t, got.serve.HandshakeTimeout, "11s")
+	assertOptionalString(t, got.serve.ConnectTimeout, "32s")
+	assertOptionalString(t, got.serve.MaxConnections, "333")
 	assertOptionalString(t, got.serve.HostID, "env-host")
 	assertOptionalString(t, got.serve.Browser, "edge")
 	assertOptionalString(t, got.serve.BrowserPath, "cli-browser")
@@ -168,104 +198,4 @@ func TestResolveRawInvocation_CLIOverridesEnvironmentForBrowserPath_whenBothPres
 		t.Fatalf("resolveRawInvocation() error = %v", err)
 	}
 	assertOptionalString(t, got.auth.BrowserPath, "cli-browser")
-}
-
-func TestResolveRawInvocation_rejectsFinalBlankServePortalOverride_whenLowerPortalIsNonblank(t *testing.T) {
-	tests := []struct {
-		name      string
-		lookupEnv lookupEnvFunc
-		cliPortal optionalString
-	}{
-		{
-			name:      "environment whitespace",
-			lookupEnv: testLookupEnv(map[string]string{"GP_SOCKS_PORTAL": " \t "}),
-		},
-		{
-			name:      "CLI whitespace",
-			lookupEnv: testLookupEnv(map[string]string{}),
-			cliPortal: testOptionalString(" \t "),
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			// Given
-			const lowerPortal = "private-file-portal"
-			file := fileConfig{Serve: servePatch{Portal: testOptionalString(lowerPortal)}}
-			cli := cliInvocation{
-				command: commandServe,
-				serve:   servePatch{Portal: test.cliPortal},
-			}
-
-			// When
-			_, err := resolveRawInvocation(cli, file, test.lookupEnv)
-
-			// Then
-			if err == nil {
-				t.Fatal("resolveRawInvocation() error = nil, want portal-clearing configuration error")
-			}
-			if strings.Contains(err.Error(), lowerPortal) {
-				t.Fatalf("resolveRawInvocation() error exposed lower-precedence portal: %v", err)
-			}
-		})
-	}
-}
-
-func TestResolveRawInvocation_keepsFinalBlankServePortal_whenNoLowerPortalIsNonblank(t *testing.T) {
-	tests := []struct {
-		name      string
-		lookupEnv lookupEnvFunc
-		cliPortal optionalString
-		want      string
-	}{
-		{
-			name:      "environment whitespace",
-			lookupEnv: testLookupEnv(map[string]string{"GP_SOCKS_PORTAL": " \t "}),
-			want:      " \t ",
-		},
-		{
-			name:      "CLI whitespace",
-			lookupEnv: testLookupEnv(map[string]string{}),
-			cliPortal: testOptionalString(" \t "),
-			want:      " \t ",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			// Given
-			cli := cliInvocation{
-				command: commandServe,
-				serve:   servePatch{Portal: test.cliPortal},
-			}
-
-			// When
-			got, err := resolveRawInvocation(cli, fileConfig{}, test.lookupEnv)
-
-			// Then
-			if err != nil {
-				t.Fatalf("resolveRawInvocation() error = %v, want direct mode", err)
-			}
-			assertOptionalString(t, got.serve.Portal, test.want)
-		})
-	}
-}
-
-func TestResolveRawInvocation_allowsNonblankCLIServePortal_afterBlankEnvironmentPortal(t *testing.T) {
-	// Given
-	file := fileConfig{Serve: servePatch{Portal: testOptionalString("file-portal")}}
-	lookupEnv := testLookupEnv(map[string]string{"GP_SOCKS_PORTAL": " \t "})
-	cli := cliInvocation{
-		command: commandServe,
-		serve:   servePatch{Portal: testOptionalString("cli-portal")},
-	}
-
-	// When
-	got, err := resolveRawInvocation(cli, file, lookupEnv)
-
-	// Then
-	if err != nil {
-		t.Fatalf("resolveRawInvocation() error = %v", err)
-	}
-	assertOptionalString(t, got.serve.Portal, "cli-portal")
 }

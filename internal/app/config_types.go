@@ -41,6 +41,13 @@ type servePatch struct {
 	Listen            optionalString
 	Portal            optionalString
 	Gateway           optionalString
+	DNSMode           optionalString
+	DNSServers        optionalString
+	SOCKSUsername     optionalString
+	SOCKSPassword     optionalString
+	HandshakeTimeout  optionalString
+	ConnectTimeout    optionalString
+	MaxConnections    optionalString
 	HostID            optionalString
 	Browser           optionalString
 	BrowserPath       optionalString
@@ -57,22 +64,24 @@ type fileConfig struct {
 }
 
 type cliInvocation struct {
-	command    commandName
-	configPath optionalString
-	noConfig   bool
-	logLevel   optionalString
-	arguments  []string
-	probe      probePatch
-	auth       authPatch
-	serve      servePatch
+	command          commandName
+	configPath       optionalString
+	noConfig         bool
+	allowNonLoopback bool
+	logLevel         optionalString
+	arguments        []string
+	probe            probePatch
+	auth             authPatch
+	serve            servePatch
 }
 
 type rawInvocation struct {
-	command  commandName
-	logLevel optionalString
-	probe    probePatch
-	auth     authPatch
-	serve    servePatch
+	command          commandName
+	allowNonLoopback bool
+	logLevel         optionalString
+	probe            probePatch
+	auth             authPatch
+	serve            servePatch
 }
 
 func defaultsFor(command commandName) rawInvocation {
@@ -104,6 +113,13 @@ func defaultsFor(command commandName) rawInvocation {
 			Listen:            presentString("127.0.0.1:1080"),
 			Portal:            presentString(""),
 			Gateway:           presentString(""),
+			DNSMode:           presentString("vpn"),
+			DNSServers:        presentString(""),
+			SOCKSUsername:     presentString(""),
+			SOCKSPassword:     presentString(""),
+			HandshakeTimeout:  presentString("10s"),
+			ConnectTimeout:    presentString("30s"),
+			MaxConnections:    presentString("256"),
 			HostID:            presentString("gp-socks"),
 			Browser:           presentString("auto"),
 			BrowserPath:       presentString(""),

@@ -35,8 +35,15 @@ auth:
   debug_log: "auth.jsonl"
 serve:
   listen: "127.0.0.1:2080"
+  socks_username: "serve-user"
+  socks_password: "serve-password"
+  handshake_timeout: "12s"
+  connect_timeout: "34s"
+  max_connections: "345"
   portal: "https://serve.example.test"
   gateway: "https://gateway.example.test"
+  dns_mode: "vpn"
+  dns_servers: "10.0.0.53,10.0.0.54"
   host_id: "serve-host"
   browser: "edge"
   browser_path: "serve-browser"
@@ -59,7 +66,11 @@ serve:
 		Serve: servePatch{
 			Listen: testOptionalString("127.0.0.1:2080"), Portal: testOptionalString("https://serve.example.test"),
 			Gateway: testOptionalString("https://gateway.example.test"), HostID: testOptionalString("serve-host"),
-			Browser: testOptionalString("edge"), BrowserPath: testOptionalString("serve-browser"),
+			DNSMode: testOptionalString("vpn"), DNSServers: testOptionalString("10.0.0.53,10.0.0.54"),
+			SOCKSUsername: testOptionalString("serve-user"), SOCKSPassword: testOptionalString("serve-password"),
+			HandshakeTimeout: testOptionalString("12s"), ConnectTimeout: testOptionalString("34s"),
+			MaxConnections: testOptionalString("345"),
+			Browser:        testOptionalString("edge"), BrowserPath: testOptionalString("serve-browser"),
 			BrowserProfileDir: testOptionalString("serve-profile"), Timeout: testOptionalString("90s"),
 			DebugLog: testOptionalString("serve.jsonl"),
 		},
@@ -70,7 +81,7 @@ serve:
 		t.Fatalf("decodeConfig() error = %v", err)
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("decodeConfig() = %#v, want %#v", got, want)
+		t.Fatal("decodeConfig() did not decode the complete schema")
 	}
 }
 

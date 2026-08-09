@@ -9,6 +9,7 @@ var (
 	ErrUnsupportedNetwork = errors.New("tunnel: unsupported network")
 	ErrIPv6Unsupported    = errors.New("tunnel: ipv6 unsupported")
 	ErrNoIPv4Address      = errors.New("tunnel: no ipv4 address")
+	ErrDNSUnavailable     = errors.New("tunnel: vpn dns unavailable")
 )
 
 type netstackError struct {

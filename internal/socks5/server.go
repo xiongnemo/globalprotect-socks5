@@ -2,51 +2,84 @@ package socks5
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"net"
-	"slices"
-	"strconv"
 	"sync"
+	"time"
 )
 
 const (
-	version5        = byte(0x05)
-	methodNoAuth    = byte(0x00)
-	commandConnect  = byte(0x01)
-	addrIPv4        = byte(0x01)
-	addrDomain      = byte(0x03)
-	addrIPv6        = byte(0x04)
-	replySucceeded  = byte(0x00)
-	replyGeneralErr = byte(0x01)
+	defaultHandshakeTimeout = 10 * time.Second
+	defaultConnectTimeout   = 30 * time.Second
+	defaultMaxConnections   = 256
 )
 
 type DialFunc func(ctx context.Context, network string, address string) (net.Conn, error)
 
+type Credentials struct {
+	Username string
+	Password string
+}
+
 type Config struct {
-	DialContext DialFunc
+	DialContext      DialFunc
+	Credentials      *Credentials
+	HandshakeTimeout time.Duration
+	ConnectTimeout   time.Duration
+	MaxConnections   int
 }
 
 type Server struct {
-	dial  DialFunc
-	mu    sync.Mutex
-	conns map[net.Conn]struct{}
+	dial             DialFunc
+	credentials      *Credentials
+	handshakeTimeout time.Duration
+	connectTimeout   time.Duration
+	limit            chan struct{}
+	mu               sync.Mutex
+	conns            map[net.Conn]struct{}
 }
 
 func NewServer(cfg Config) *Server {
-	return &Server{dial: cfg.DialContext, conns: map[net.Conn]struct{}{}}
+	if cfg.HandshakeTimeout <= 0 {
+		cfg.HandshakeTimeout = defaultHandshakeTimeout
+	}
+	if cfg.ConnectTimeout <= 0 {
+		cfg.ConnectTimeout = defaultConnectTimeout
+	}
+	if cfg.MaxConnections <= 0 {
+		cfg.MaxConnections = defaultMaxConnections
+	}
+	var credentials *Credentials
+	if cfg.Credentials != nil {
+		copied := *cfg.Credentials
+		credentials = &copied
+	}
+	return &Server{
+		dial: cfg.DialContext, credentials: credentials,
+		handshakeTimeout: cfg.HandshakeTimeout, connectTimeout: cfg.ConnectTimeout,
+		limit: make(chan struct{}, cfg.MaxConnections), conns: map[net.Conn]struct{}{},
+	}
 }
 
 func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
-	var wg sync.WaitGroup
+	serveDone := make(chan struct{})
+	defer close(serveDone)
 	go func() {
-		<-ctx.Done()
-		_ = listener.Close()
-		s.closeActive()
+		select {
+		case <-ctx.Done():
+			_ = listener.Close()
+			s.closeActive()
+		case <-serveDone:
+		}
 	}()
-	defer wg.Wait()
+
+	var wg sync.WaitGroup
+	defer func() {
+		s.closeActive()
+		wg.Wait()
+	}()
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -59,15 +92,62 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 			_ = conn.Close()
 			return nil
 		}
+		if !s.acquire() {
+			_ = conn.Close()
+			continue
+		}
 		s.track(conn)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer s.release()
 			defer s.untrack(conn)
 			_ = s.handle(ctx, conn)
 		}()
 	}
 }
+
+func (s *Server) handle(ctx context.Context, client net.Conn) error {
+	stop := context.AfterFunc(ctx, func() { _ = client.Close() })
+	defer stop()
+	if err := client.SetDeadline(time.Now().Add(s.handshakeTimeout)); err != nil {
+		return fmt.Errorf("set socks handshake deadline: %w", err)
+	}
+	if err := negotiate(client, s.credentials); err != nil {
+		return err
+	}
+	target, err := readConnectTarget(client)
+	if err != nil {
+		_ = writeReply(client, replyCode(err), nil)
+		return err
+	}
+	if err := client.SetDeadline(time.Time{}); err != nil {
+		return fmt.Errorf("clear socks handshake deadline: %w", err)
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, s.connectTimeout)
+	defer cancel()
+	upstream, err := s.dial(dialCtx, "tcp", target)
+	if err != nil {
+		_ = writeReply(client, dialReplyCode(err), nil)
+		return fmt.Errorf("dial socks target: %w", err)
+	}
+	defer upstream.Close()
+	if err := writeReply(client, replySucceeded, upstream.LocalAddr()); err != nil {
+		return err
+	}
+	return proxy(ctx, client, upstream)
+}
+
+func (s *Server) acquire() bool {
+	select {
+	case s.limit <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) release() { <-s.limit }
 
 func (s *Server) track(conn net.Conn) {
 	s.mu.Lock()
@@ -90,127 +170,17 @@ func (s *Server) closeActive() {
 	}
 }
 
-func (s *Server) handle(ctx context.Context, client net.Conn) error {
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = client.Close()
-		case <-done:
-		}
-	}()
-	defer close(done)
-	if err := negotiateNoAuth(client); err != nil {
-		return err
-	}
-	target, err := readConnectTarget(client)
-	if err != nil {
-		_ = writeReply(client, replyGeneralErr)
-		return err
-	}
-	upstream, err := s.dial(ctx, "tcp", target)
-	if err != nil {
-		_ = writeReply(client, replyGeneralErr)
-		return fmt.Errorf("dial target %s: %w", target, err)
-	}
-	defer upstream.Close()
-	if err := writeReply(client, replySucceeded); err != nil {
-		return err
-	}
-	return proxy(ctx, client, upstream)
-}
-
-func negotiateNoAuth(conn io.ReadWriter) error {
-	header := make([]byte, 2)
-	if _, err := io.ReadFull(conn, header); err != nil {
-		return fmt.Errorf("read socks greeting: %w", err)
-	}
-	if header[0] != version5 {
-		return fmt.Errorf("unsupported socks version %d", header[0])
-	}
-	methods := make([]byte, int(header[1]))
-	if _, err := io.ReadFull(conn, methods); err != nil {
-		return fmt.Errorf("read socks methods: %w", err)
-	}
-	if slices.Contains(methods, methodNoAuth) {
-		if _, err := conn.Write([]byte{version5, methodNoAuth}); err != nil {
-			return fmt.Errorf("write greeting response: %w", err)
-		}
-		return nil
-	}
-	if _, err := conn.Write([]byte{version5, 0xff}); err != nil {
-		return fmt.Errorf("write auth rejection: %w", err)
-	}
-	return errors.New("socks5: no supported auth method")
-}
-
-func readConnectTarget(r io.Reader) (string, error) {
-	header := make([]byte, 4)
-	if _, err := io.ReadFull(r, header); err != nil {
-		return "", fmt.Errorf("read connect header: %w", err)
-	}
-	if header[0] != version5 || header[1] != commandConnect || header[2] != 0x00 {
-		return "", errors.New("socks5: unsupported request")
-	}
-	host, err := readAddress(r, header[3])
-	if err != nil {
-		return "", err
-	}
-	portBytes := make([]byte, 2)
-	if _, err := io.ReadFull(r, portBytes); err != nil {
-		return "", fmt.Errorf("read target port: %w", err)
-	}
-	port := binary.BigEndian.Uint16(portBytes)
-	return net.JoinHostPort(host, strconv.Itoa(int(port))), nil
-}
-
-func readAddress(r io.Reader, typ byte) (string, error) {
-	switch typ {
-	case addrIPv4:
-		buf := make([]byte, net.IPv4len)
-		if _, err := io.ReadFull(r, buf); err != nil {
-			return "", fmt.Errorf("read ipv4 address: %w", err)
-		}
-		return net.IP(buf).String(), nil
-	case addrIPv6:
-		buf := make([]byte, net.IPv6len)
-		if _, err := io.ReadFull(r, buf); err != nil {
-			return "", fmt.Errorf("read ipv6 address: %w", err)
-		}
-		return net.IP(buf).String(), nil
-	case addrDomain:
-		lenBuf := make([]byte, 1)
-		if _, err := io.ReadFull(r, lenBuf); err != nil {
-			return "", fmt.Errorf("read domain length: %w", err)
-		}
-		buf := make([]byte, int(lenBuf[0]))
-		if _, err := io.ReadFull(r, buf); err != nil {
-			return "", fmt.Errorf("read domain address: %w", err)
-		}
-		return string(buf), nil
-	default:
-		return "", fmt.Errorf("unsupported address type %d", typ)
-	}
-}
-
-func writeReply(w io.Writer, code byte) error {
-	_, err := w.Write([]byte{version5, code, 0x00, addrIPv4, 0, 0, 0, 0, 0, 0})
-	if err != nil {
-		return fmt.Errorf("write socks reply: %w", err)
-	}
-	return nil
-}
-
-func proxy(ctx context.Context, client net.Conn, upstream net.Conn) error {
+func proxy(ctx context.Context, client, upstream net.Conn) error {
 	errCh := make(chan error, 2)
 	go copyConn(errCh, upstream, client)
 	go copyConn(errCh, client, upstream)
-	var firstErr error
 	for range 2 {
 		select {
 		case err := <-errCh:
-			if err != nil && firstErr == nil && !errors.Is(err, net.ErrClosed) {
-				firstErr = err
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				_ = client.Close()
+				_ = upstream.Close()
+				return err
 			}
 		case <-ctx.Done():
 			_ = client.Close()
@@ -218,7 +188,7 @@ func proxy(ctx context.Context, client net.Conn, upstream net.Conn) error {
 			return nil
 		}
 	}
-	return firstErr
+	return nil
 }
 
 func copyConn(errCh chan<- error, dst net.Conn, src net.Conn) {

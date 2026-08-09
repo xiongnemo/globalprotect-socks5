@@ -63,8 +63,15 @@ func TestResolveRawInvocation_readsApplicableServeEnvironment(t *testing.T) {
 	lookupEnv := testLookupEnv(map[string]string{
 		"GP_SOCKS_LOG_LEVEL":           "warn",
 		"GP_SOCKS_LISTEN":              "127.0.0.1:2080",
+		"GP_SOCKS_USERNAME":            "env-user",
+		"GP_SOCKS_PASSWORD":            "env-password",
+		"GP_SOCKS_HANDSHAKE_TIMEOUT":   "12s",
+		"GP_SOCKS_CONNECT_TIMEOUT":     "34s",
+		"GP_SOCKS_MAX_CONNECTIONS":     "345",
 		"GP_SOCKS_PORTAL":              "env-portal",
 		"GP_SOCKS_GATEWAY":             "env-gateway",
+		"GP_SOCKS_DNS_MODE":            "system",
+		"GP_SOCKS_DNS_SERVERS":         "",
 		"GP_SOCKS_HOST_ID":             "env-host",
 		"GP_SOCKS_BROWSER":             "edge",
 		"GP_SOCKS_BROWSER_PATH":        "env-browser",
@@ -83,8 +90,17 @@ func TestResolveRawInvocation_readsApplicableServeEnvironment(t *testing.T) {
 	}
 	assertOptionalString(t, got.logLevel, "warn")
 	assertOptionalString(t, got.serve.Listen, "127.0.0.1:2080")
+	assertOptionalString(t, got.serve.SOCKSUsername, "env-user")
+	if got.serve.SOCKSPassword.value != "env-password" || !got.serve.SOCKSPassword.present {
+		t.Fatal("SOCKS password environment value was not resolved")
+	}
+	assertOptionalString(t, got.serve.HandshakeTimeout, "12s")
+	assertOptionalString(t, got.serve.ConnectTimeout, "34s")
+	assertOptionalString(t, got.serve.MaxConnections, "345")
 	assertOptionalString(t, got.serve.Portal, "env-portal")
 	assertOptionalString(t, got.serve.Gateway, "env-gateway")
+	assertOptionalString(t, got.serve.DNSMode, "system")
+	assertOptionalString(t, got.serve.DNSServers, "")
 	assertOptionalString(t, got.serve.HostID, "env-host")
 	assertOptionalString(t, got.serve.Browser, "edge")
 	assertOptionalString(t, got.serve.BrowserPath, "env-browser")

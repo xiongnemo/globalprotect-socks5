@@ -3,6 +3,9 @@ package browserauth
 import (
 	"context"
 	"fmt"
+	"os"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/chromedp/cdproto/network"
@@ -40,6 +43,7 @@ func newChromedpRuntime(ctx context.Context, config browserRuntimeConfig) (brows
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath(config.browserPath),
 		chromedp.UserDataDir(config.profileDir),
+		chromedp.Env(browserEnvironmentResets(os.Environ())...),
 		chromedp.Flag("headless", false),
 	)
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
@@ -52,6 +56,26 @@ func newChromedpRuntime(ctx context.Context, config browserRuntimeConfig) (brows
 	return &chromedpRuntime{
 		browserCtx: browserCtx, browserCancel: browserCancel, allocCancel: allocCancel,
 	}, nil
+}
+
+func browserEnvironmentResets(environ []string) []string {
+	const prefix = "GP_SOCKS_"
+	seen := make(map[string]struct{})
+	resets := make([]string, 0)
+	for _, entry := range environ {
+		name, _, ok := strings.Cut(entry, "=")
+		key := strings.ToUpper(name)
+		if !ok || !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		resets = append(resets, name+"=")
+	}
+	sort.Strings(resets)
+	return resets
 }
 
 func (r *chromedpRuntime) capture(ctx context.Context, request runtimeCaptureRequest) (gp.AuthArtifact, error) {

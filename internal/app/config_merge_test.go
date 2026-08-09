@@ -79,6 +79,13 @@ func TestMergeServe_overlaysOnlyPresentFields(t *testing.T) {
 		Listen:            testOptionalString("base-listen"),
 		Portal:            testOptionalString("base-portal"),
 		Gateway:           testOptionalString("base-gateway"),
+		DNSMode:           testOptionalString("vpn"),
+		DNSServers:        testOptionalString("base-dns"),
+		SOCKSUsername:     testOptionalString("base-user"),
+		SOCKSPassword:     testOptionalString("base-password"),
+		HandshakeTimeout:  testOptionalString("10s"),
+		ConnectTimeout:    testOptionalString("30s"),
+		MaxConnections:    testOptionalString("256"),
 		HostID:            testOptionalString("base-host"),
 		Browser:           testOptionalString("auto"),
 		BrowserPath:       testOptionalString("base-browser"),
@@ -89,17 +96,32 @@ func TestMergeServe_overlaysOnlyPresentFields(t *testing.T) {
 	environment := servePatch{
 		Portal:            testOptionalString("env-portal"),
 		Gateway:           testOptionalString("env-gateway"),
+		SOCKSUsername:     testOptionalString("env-user"),
+		SOCKSPassword:     testOptionalString("env-password"),
+		ConnectTimeout:    testOptionalString("31s"),
+		DNSServers:        testOptionalString("env-dns"),
 		BrowserProfileDir: testOptionalString(""),
 	}
 	cli := servePatch{
-		Listen:      testOptionalString("cli-listen"),
-		Gateway:     testOptionalString("cli-gateway"),
-		BrowserPath: testOptionalString("cli-browser"),
+		Listen:         testOptionalString("cli-listen"),
+		Gateway:        testOptionalString("cli-gateway"),
+		SOCKSPassword:  testOptionalString("cli-password"),
+		MaxConnections: testOptionalString("512"),
+		DNSMode:        testOptionalString("system"),
+		DNSServers:     testOptionalString(""),
+		BrowserPath:    testOptionalString("cli-browser"),
 	}
 	want := servePatch{
 		Listen:            testOptionalString("cli-listen"),
 		Portal:            testOptionalString("env-portal"),
 		Gateway:           testOptionalString("cli-gateway"),
+		DNSMode:           testOptionalString("system"),
+		DNSServers:        testOptionalString(""),
+		SOCKSUsername:     testOptionalString("env-user"),
+		SOCKSPassword:     testOptionalString("cli-password"),
+		HandshakeTimeout:  testOptionalString("10s"),
+		ConnectTimeout:    testOptionalString("31s"),
+		MaxConnections:    testOptionalString("512"),
 		HostID:            testOptionalString("base-host"),
 		Browser:           testOptionalString("auto"),
 		BrowserPath:       testOptionalString("cli-browser"),
@@ -113,6 +135,6 @@ func TestMergeServe_overlaysOnlyPresentFields(t *testing.T) {
 
 	// Then
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("mergeServe() = %#v, want %#v", got, want)
+		t.Fatal("mergeServe() did not apply field precedence")
 	}
 }

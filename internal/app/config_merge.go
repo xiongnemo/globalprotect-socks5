@@ -39,8 +39,15 @@ func mergeServe(base servePatch, overlays ...servePatch) servePatch {
 	merged := base
 	for _, overlay := range overlays {
 		merged.Listen = mergeOptional(merged.Listen, overlay.Listen)
+		merged.SOCKSUsername = mergeOptional(merged.SOCKSUsername, overlay.SOCKSUsername)
+		merged.SOCKSPassword = mergeOptional(merged.SOCKSPassword, overlay.SOCKSPassword)
+		merged.HandshakeTimeout = mergeOptional(merged.HandshakeTimeout, overlay.HandshakeTimeout)
+		merged.ConnectTimeout = mergeOptional(merged.ConnectTimeout, overlay.ConnectTimeout)
+		merged.MaxConnections = mergeOptional(merged.MaxConnections, overlay.MaxConnections)
 		merged.Portal = mergeOptional(merged.Portal, overlay.Portal)
 		merged.Gateway = mergeOptional(merged.Gateway, overlay.Gateway)
+		merged.DNSMode = mergeOptional(merged.DNSMode, overlay.DNSMode)
+		merged.DNSServers = mergeOptional(merged.DNSServers, overlay.DNSServers)
 		merged.HostID = mergeOptional(merged.HostID, overlay.HostID)
 		merged.Browser = mergeOptional(merged.Browser, overlay.Browser)
 		merged.BrowserPath = mergeOptional(merged.BrowserPath, overlay.BrowserPath)

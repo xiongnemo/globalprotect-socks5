@@ -28,6 +28,10 @@ func Test_Dialer_DialContext_failsPromptly_afterPacketReadFails(t *testing.T) {
 	if !errors.Is(err, readErr) {
 		t.Fatalf("error = %v, want read pump error", err)
 	}
+	waitHealthDone(t, dialer.Done())
+	if !errors.Is(dialer.Err(), readErr) {
+		t.Fatalf("Err() = %v, want read pump error", dialer.Err())
+	}
 }
 
 func Test_Dialer_DialContext_failsPromptly_afterPacketWriteFails(t *testing.T) {
@@ -46,6 +50,10 @@ func Test_Dialer_DialContext_failsPromptly_afterPacketWriteFails(t *testing.T) {
 	// Then
 	if !errors.Is(err, writeErr) {
 		t.Fatalf("error = %v, want write pump error", err)
+	}
+	waitHealthDone(t, dialer.Done())
+	if !errors.Is(dialer.Err(), writeErr) {
+		t.Fatalf("Err() = %v, want write pump error", dialer.Err())
 	}
 }
 

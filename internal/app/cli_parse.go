@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"time"
 )
 
 func parseCLIInvocation(args []string, stderr io.Writer) (cliInvocation, error) {
@@ -42,7 +43,7 @@ func parseCLIInvocation(args []string, stderr io.Writer) (cliInvocation, error) 
 	case commandAuth:
 		invocation.auth, err = parseAuthFlags(commandArgs, stderr)
 	case commandServe:
-		invocation.serve, err = parseServeFlags(commandArgs, stderr)
+		invocation.serve, invocation.allowNonLoopback, err = parseServeFlags(commandArgs, stderr)
 	case commandParseAuth:
 		invocation.arguments = append([]string(nil), commandArgs...)
 	default:
@@ -116,12 +117,20 @@ func parseAuthFlags(args []string, stderr io.Writer) (authPatch, error) {
 	return patch, nil
 }
 
-func parseServeFlags(args []string, stderr io.Writer) (servePatch, error) {
+func parseServeFlags(args []string, stderr io.Writer) (servePatch, bool, error) {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.String("listen", "127.0.0.1:1080", "SOCKS5 listen address")
+	flags.String("socks-username", "", "SOCKS5 username")
+	flags.String("socks-password", "", "SOCKS5 password")
+	flags.Duration("handshake-timeout", 10*time.Second, "SOCKS5 handshake timeout")
+	flags.Duration("connect-timeout", 30*time.Second, "SOCKS5 target connect timeout")
+	flags.Int("max-connections", 256, "maximum concurrent SOCKS5 connections")
+	allowNonLoopback := flags.Bool("allow-non-loopback", false, "allow authenticated SOCKS5 listening outside loopback")
 	flags.String("portal", "", "GlobalProtect portal URL; enables VPN-backed egress")
 	flags.String("gateway", "", "GlobalProtect gateway URL; overrides portal-selected gateway")
+	flags.String("dns-mode", "vpn", "DNS resolver mode: vpn or system")
+	flags.String("dns-servers", "", "comma-separated DNS server IPs; overrides gateway DNS in vpn mode")
 	flags.String("host-id", "gp-socks", "stable GlobalProtect host-id")
 	flags.String("browser", "auto", "browser: auto, chrome, or edge")
 	flags.String("browser-path", "", "explicit Chrome or Edge executable path")
@@ -129,7 +138,7 @@ func parseServeFlags(args []string, stderr io.Writer) (servePatch, error) {
 	flags.Duration("timeout", defaultBrowserAuthTimeout, "maximum time to wait for browser SSO")
 	flags.String("debug-log", "", "write redacted GlobalProtect HTTP debug JSONL to this file")
 	if err := flags.Parse(args); err != nil {
-		return servePatch{}, fmt.Errorf("parse serve flags: %w", err)
+		return servePatch{}, false, fmt.Errorf("parse serve flags: %w", err)
 	}
 
 	var patch servePatch
@@ -138,10 +147,24 @@ func parseServeFlags(args []string, stderr io.Writer) (servePatch, error) {
 		switch visited.Name {
 		case "listen":
 			patch.Listen = value
+		case "socks-username":
+			patch.SOCKSUsername = value
+		case "socks-password":
+			patch.SOCKSPassword = value
+		case "handshake-timeout":
+			patch.HandshakeTimeout = value
+		case "connect-timeout":
+			patch.ConnectTimeout = value
+		case "max-connections":
+			patch.MaxConnections = value
 		case "portal":
 			patch.Portal = value
 		case "gateway":
 			patch.Gateway = value
+		case "dns-mode":
+			patch.DNSMode = value
+		case "dns-servers":
+			patch.DNSServers = value
 		case "host-id":
 			patch.HostID = value
 		case "browser":
@@ -156,5 +179,5 @@ func parseServeFlags(args []string, stderr io.Writer) (servePatch, error) {
 			patch.DebugLog = value
 		}
 	})
-	return patch, nil
+	return patch, *allowNonLoopback, nil
 }

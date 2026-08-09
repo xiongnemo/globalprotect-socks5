@@ -18,6 +18,7 @@ import (
 	"github.com/noisysockets/netstack/pkg/tcpip/network/ipv4"
 	"github.com/noisysockets/netstack/pkg/tcpip/stack"
 	"github.com/noisysockets/netstack/pkg/tcpip/transport/tcp"
+	"github.com/noisysockets/netstack/pkg/tcpip/transport/udp"
 	"github.com/xiongnemo/globalprotect-socks5/internal/tunnel"
 )
 
@@ -138,7 +139,7 @@ func newTestStack(t *testing.T, addr netip.Addr) (*stack.Stack, *channel.Endpoin
 	t.Helper()
 	s := stack.New(stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol},
-		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol},
+		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol},
 	})
 	linkEP := channel.New(64, 1500, "")
 	if err := s.CreateNIC(testNICID, linkEP); err != nil {

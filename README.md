@@ -9,7 +9,7 @@ This repository intentionally starts with the safe pieces that can be tested wit
 - complete user-present SSO in system Chrome or Edge and capture the ACS response artifact through CDP;
 - run a local SOCKS5 TCP `CONNECT` listener directly or through a GlobalProtect SSL packet tunnel.
 
-Without `--portal`, `serve` uses a direct TCP dialer. With `--portal`, it performs a user-present portal SAML capture, exchanges that artifact for portal policy and both portal auth-cookie variants, then calls the selected gateway prelogin and retains its response before trying those portal credentials at the gateway. If the gateway accepts them, no gateway SAML exchange is needed. If the cookies are absent or explicitly rejected with HTTP 512, `serve` completes the retained gateway SAML request in the same live, isolated Chromium session and retries with the newly issued gateway prelogin cookie; the existing IdP session can make this second protocol exchange silent, although the IdP may still require fresh interaction. Other gateway failures do not trigger SAML fallback. IPv6 and in-tunnel DNS are not supported yet; hostname targets are resolved before dialing through the tunnel.
+Without `--portal`, `serve` uses a direct TCP dialer. With `--portal`, it performs a user-present portal SAML capture, exchanges that artifact for portal policy and both portal auth-cookie variants, then calls the selected gateway prelogin and retains its response before trying those portal credentials at the gateway. If the gateway accepts them, no gateway SAML exchange is needed. If the cookies are absent or explicitly rejected with HTTP 512, `serve` completes the retained gateway SAML request in the same live, isolated Chromium session and retries with the newly issued gateway prelogin cookie; the existing IdP session can make this second protocol exchange silent, although the IdP may still require fresh interaction. Other gateway failures do not trigger SAML fallback. IPv6 is not supported yet. In portal-backed mode, hostname targets can be resolved through DNS inside the VPN tunnel.
 
 It does not read browser cookie databases, bypass MFA, call an external `openconnect` binary, use Docker as runtime, or use cgo.
 
@@ -34,6 +34,8 @@ go build -o bin/gp-socks ./cmd/gp-socks
 ./bin/gp-socks serve --listen 127.0.0.1:1080 --portal https://vpn.monashuniversity.cn --host-id test-host --browser auto
 ./bin/gp-socks serve --listen 127.0.0.1:1080 --portal https://vpn.monashuniversity.cn --host-id test-host --browser auto --browser-profile-dir .gp-browser-profile
 ./bin/gp-socks serve --listen 127.0.0.1:1080 --portal https://vpn.monashuniversity.cn --host-id test-host --browser auto --debug-log gp-debug.jsonl
+./bin/gp-socks serve --listen 127.0.0.1:1080 --socks-username proxy-user --socks-password 'replace-with-a-strong-password'
+./bin/gp-socks serve --portal https://vpn.example.edu --dns-mode vpn --dns-servers 10.0.0.53,10.0.0.54
 ```
 
 Linux and macOS shell:
@@ -62,7 +64,51 @@ By default, portal-backed `serve` keeps one isolated temporary profile and one l
 
 Use `--debug-log <path>` with `probe`, `auth`, or `serve` when troubleshooting portal or gateway compatibility. It writes local JSONL events for GlobalProtect control-plane HTTP calls, including stage, path, status, request form field names, and redacted failure snippets. It does not write raw SAML payloads, cookies, auth cookies, bearer tokens, assertions, passwords, or Authorization values.
 
-Keep `--listen` on a loopback address unless you intentionally want other machines to use the proxy. The SOCKS5 listener has no authentication, so binding it to `0.0.0.0` can expose VPN-backed egress to the local network.
+### SOCKS5 authentication and connection controls
+
+Set both `--socks-username` and `--socks-password` to require SOCKS5 username/password authentication (RFC 1929). When credentials are configured, the server accepts only that method and does not fall back to unauthenticated SOCKS5. Each value must contain 1–255 UTF-8 bytes; leaving both blank disables authentication, while setting only one is invalid.
+
+RFC 1929 does not encrypt the username, password, or proxied traffic. Keep the listener on loopback whenever possible. A non-loopback listen address is rejected unless the invocation includes the CLI-only `--allow-non-loopback` flag **and** valid SOCKS5 credentials. Even then, expose it only on a trusted network or behind an encrypted transport; do not publish it directly to the Internet.
+
+Passwords may be written directly in YAML, supplied through `GP_SOCKS_PASSWORD`, or passed with `--socks-password`. They are not written to normal output, application logs, or the redacted debug log, but each storage mechanism has its own exposure risk: protect the YAML file with appropriate filesystem permissions, limit access to the process environment, and remember that CLI arguments can be retained in shell history or visible in process listings. Use placeholders rather than real credentials in shared scripts and documentation.
+
+The listener defaults to a `10s` SOCKS handshake deadline, a `30s` target connection timeout, and at most `256` concurrent client connections. Configure these with `--handshake-timeout`, `--connect-timeout`, and `--max-connections` (valid range `1`–`65535`). The handshake deadline covers greeting, optional authentication, and the `CONNECT` request. These settings do not impose an idle timeout on an established proxied stream. Connections accepted after the concurrency limit is reached are closed immediately.
+
+Equivalent environment configuration, using example-only credentials, is:
+
+```bash
+export GP_SOCKS_USERNAME='proxy-user'
+export GP_SOCKS_PASSWORD='replace-with-a-strong-password'
+export GP_SOCKS_HANDSHAKE_TIMEOUT='10s'
+export GP_SOCKS_CONNECT_TIMEOUT='30s'
+export GP_SOCKS_MAX_CONNECTIONS='256'
+./bin/gp-socks serve
+```
+
+### VPN DNS and hostname resolution
+
+Portal-backed `serve` defaults to `dns_mode: "vpn"`. It uses the IPv4 DNS servers and search suffixes delivered by the selected gateway, and sends those DNS queries through the VPN tunnel. Supplying `dns_servers` replaces the gateway-provided server list; entries must be IPv4 address literals. The resolver tries UDP first and can retry truncated replies over TCP, all through the tunnel.
+
+Set `dns_mode: "system"` (or `--dns-mode system`) only to opt out explicitly and use the host's normal resolver. System mode can leak target names outside the VPN and cannot be combined with custom `dns_servers`. Custom DNS servers require portal-backed mode. In VPN mode, if neither the gateway nor the user supplies a DNS server, domain-name connections fail rather than silently falling back to system DNS; IPv4-literal targets still work.
+
+The SOCKS client must send the hostname to the proxy for this remote resolution to apply. For example, use `curl --socks5-hostname 127.0.0.1:1080 https://example.com/` or a `socks5h://127.0.0.1:1080` proxy URL. A client configured for plain `socks5://` may resolve names locally before contacting the proxy, bypassing VPN DNS regardless of server settings.
+
+Example-only environment and CLI overrides are:
+
+```bash
+export GP_SOCKS_DNS_MODE='vpn'
+export GP_SOCKS_DNS_SERVERS='10.0.0.53,10.0.0.54'
+./bin/gp-socks serve --portal https://vpn.example.edu
+
+./bin/gp-socks serve --portal https://vpn.example.edu \
+  --dns-mode vpn --dns-servers 10.0.0.53,10.0.0.54
+```
+
+### Tunnel liveness and reconnection
+
+The GPST data channel sends dead-peer detection probes after receive inactivity and treats a missing response as a dead tunnel. It also observes the gateway-provided tunnel timeout and initiates a planned reconnect before rekey becomes due. Reconnection opens a new packet tunnel with the already-established gateway session; it does not bypass SSO/MFA or read browser cookie stores.
+
+Each loss or planned rekey gets up to five reconnect attempts: the first is immediate, followed by exponential delays of `1s`, `2s`, `4s`, and `8s`; each attempt has a `30s` connection deadline. New SOCKS `CONNECT` requests wait while recovery is in progress and resume on the replacement tunnel. Connections carried by the old packet tunnel are interrupted and must be retried by the client. If all attempts fail, `serve` closes the SOCKS listener and exits with an error.
 
 Use `https://` portal and gateway URLs. `http://` is accepted only for local tests and will send GlobalProtect auth material without TLS.
 
@@ -94,8 +140,15 @@ auth:
 
 serve:
   listen: "127.0.0.1:1080"
+  socks_username: ""
+  socks_password: ""
+  handshake_timeout: "10s"
+  connect_timeout: "30s"
+  max_connections: "256"
   portal: ""
   gateway: ""
+  dns_mode: "vpn"
+  dns_servers: ""
   host_id: "gp-socks"
   browser: "auto"
   browser_path: ""
@@ -126,7 +179,14 @@ As a general rule, a present empty environment or CLI value still overrides lowe
 | `GP_SOCKS_BROWSER_PROFILE_DIR` | `auth`, `serve` | `browser_profile_dir` |
 | `GP_SOCKS_TIMEOUT` | `auth`, `serve` | `timeout` |
 | `GP_SOCKS_LISTEN` | `serve` | `listen` |
+| `GP_SOCKS_USERNAME` | `serve` | `socks_username` |
+| `GP_SOCKS_PASSWORD` | `serve` | `socks_password` |
+| `GP_SOCKS_HANDSHAKE_TIMEOUT` | `serve` | `handshake_timeout` |
+| `GP_SOCKS_CONNECT_TIMEOUT` | `serve` | `connect_timeout` |
+| `GP_SOCKS_MAX_CONNECTIONS` | `serve` | `max_connections` |
 | `GP_SOCKS_GATEWAY` | `serve` | `gateway` |
+| `GP_SOCKS_DNS_MODE` | `serve` | `dns_mode` |
+| `GP_SOCKS_DNS_SERVERS` | `serve` | `dns_servers` |
 
 The defaults are:
 
@@ -135,11 +195,11 @@ The defaults are:
 | root | `log_level`: `error` |
 | `probe` | `portal`: `""`; `host_id`: `gp-socks`; `sso_file`, `debug_log`: `""` |
 | `auth` | `portal`: `""`; `host_id`: `gp-socks`; `browser`: `auto`; `browser_path`, `browser_profile_dir`, `debug_log`: `""`; `timeout`: `5m` |
-| `serve` | `listen`: `127.0.0.1:1080`; `portal`, `gateway`: `""`; `host_id`: `gp-socks`; `browser`: `auto`; `browser_path`, `browser_profile_dir`, `debug_log`: `""`; `timeout`: `5m` |
+| `serve` | `listen`: `127.0.0.1:1080`; `socks_username`, `socks_password`: `""`; `handshake_timeout`: `10s`; `connect_timeout`: `30s`; `max_connections`: `256`; `portal`, `gateway`, `dns_servers`: `""`; `dns_mode`: `vpn`; `host_id`: `gp-socks`; `browser`: `auto`; `browser_path`, `browser_profile_dir`, `debug_log`: `""`; `timeout`: `5m` |
 
 The automatic `config.yaml`, relative `--config` paths, and all other explicit relative paths are resolved from the process working directory, not from the config file's directory.
 
-The final resolved `serve.listen` must not be blank or whitespace-only. An invalid value is rejected before any debug-log file, browser, authentication, tunnel, or listener activity.
+The final resolved `serve.listen` must not be blank or whitespace-only. SOCKS credentials, durations, the connection limit, DNS mode, and custom DNS servers are also validated before any debug-log file, browser, authentication, tunnel, or listener activity. `--allow-non-loopback` is intentionally CLI-only and is not persisted in YAML or accepted through an environment variable.
 
 When used as a library, `app.NewRunner` is environment- and filesystem-neutral: it does not read the process environment unless `app.IO.LookupEnv` is supplied, and it does not discover `config.yaml` unless `app.IO.AutoConfig` is true. The production CLI explicitly enables both behaviors; embedders can opt into either independently.
 

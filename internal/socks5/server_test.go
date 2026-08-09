@@ -58,6 +58,9 @@ func Test_Server_proxiesTCPConnect_whenNoAuthClientConnects(t *testing.T) {
 	if reply[1] != 0x00 {
 		t.Fatalf("CONNECT reply status = %#x, want 0", reply[1])
 	}
+	if binary.BigEndian.Uint16(reply[8:10]) == 0 {
+		t.Fatalf("CONNECT BND.PORT = 0, want upstream local port")
+	}
 	writeAll(t, conn, []byte("ping"))
 
 	// Then

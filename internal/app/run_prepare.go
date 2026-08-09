@@ -34,7 +34,7 @@ func (r Runner) prepareInvocation(cli cliInvocation) (preparedInvocation, error)
 	case commandAuth:
 		prepared.auth, err = makeAuthConfig(raw.auth)
 	case commandServe:
-		prepared.serve, err = makeServeConfig(raw.serve)
+		prepared.serve, err = makeServeConfig(raw.serve, raw.allowNonLoopback)
 	case commandParseAuth:
 	}
 	if err != nil {

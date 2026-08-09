@@ -52,7 +52,7 @@ func Test_Run_rejectsInvalidExplicitGatewayAfterPortalConfig(t *testing.T) {
 	}
 }
 
-func Test_Run_ignoresInvalidGatewayWithoutPortal(t *testing.T) {
+func Test_Run_rejectsGatewayWithoutPortalBeforeSideEffects(t *testing.T) {
 	// Given
 	stdout := newListenCapture()
 	dialer := newRecordingDialer()
@@ -63,35 +63,23 @@ func Test_Run_ignoresInvalidGatewayWithoutPortal(t *testing.T) {
 		DialContext:  dialer.DialContext,
 		AuthCapturer: capturer,
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- runner.Run(ctx, []string{"serve", "--listen", "127.0.0.1:0", "--gateway", "http://"})
-	}()
-	conn := dialServeListener(t, stdout.wait(t))
-	defer conn.Close()
-	writeSOCKSGreeting(t, conn)
-
 	// When
-	if _, err := conn.Write(connectRequest("example.test", 443)); err != nil {
-		t.Fatalf("Write() error = %v", err)
-	}
-	reply := make([]byte, 10)
-	if _, err := conn.Read(reply); err != nil {
-		t.Fatalf("Read() error = %v", err)
-	}
-	network, address := dialer.wait(t)
-	cancel()
+	err := runner.Run(context.Background(), []string{"serve", "--listen", "127.0.0.1:0", "--gateway", "http://"})
 
 	// Then
-	if network != "tcp" || address != "example.test:443" {
-		t.Fatalf("direct dial = %q %q, want tcp example.test:443", network, address)
+	if err == nil || !strings.Contains(err.Error(), "gateway requires a portal") {
+		t.Fatalf("Run() error = %v, want gateway-without-portal validation error", err)
 	}
-	if reply[1] != 0x00 {
-		t.Fatalf("SOCKS reply = %#v, want success", reply)
+	select {
+	case <-stdout.addr:
+		t.Fatal("serve listened before rejecting gateway without portal")
+	default:
 	}
-	assertServeStopped(t, errCh)
+	select {
+	case <-dialer.ready:
+		t.Fatal("serve dialed before rejecting gateway without portal")
+	default:
+	}
 	if capturer.called {
 		t.Fatal("auth capturer was called without a portal")
 	}

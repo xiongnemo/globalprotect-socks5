@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"net"
 	"net/netip"
@@ -15,18 +14,6 @@ import (
 	"github.com/xiongnemo/globalprotect-socks5/internal/tunnel"
 )
 
-type PacketTunnelRequest struct {
-	Gateway gp.PortalURL
-	Session gp.GatewaySession
-	Config  gp.TunnelConfig
-}
-
-type PacketTunnelConnector interface {
-	ConnectPacketTunnel(context.Context, PacketTunnelRequest) (tunnel.PacketTunnel, error)
-}
-
-type defaultPacketTunnelConnector struct{}
-
 type serveTunnelOptions struct {
 	portalRaw   string
 	gatewayRaw  string
@@ -36,6 +23,8 @@ type serveTunnelOptions struct {
 	profileDir  string
 	clientOpts  []gp.ClientOption
 	timeout     time.Duration
+	dnsMode     serveDNSMode
+	dnsServers  []netip.Addr
 }
 
 type serveAuthRequest struct {
@@ -56,8 +45,9 @@ func (r Runner) serve(ctx context.Context, config serveConfig, logger *appLogger
 		return err
 	}
 	dial := r.io.DialContext
+	var supervisor *tunnelSupervisor
 	if strings.TrimSpace(config.portalRaw) != "" {
-		tunnelDialer, err := r.newTunnelDialer(ctx, serveTunnelOptions{
+		supervisor, err = r.newTunnelDialer(ctx, serveTunnelOptions{
 			portalRaw:   config.portalRaw,
 			gatewayRaw:  config.gatewayRaw,
 			hostID:      config.hostID,
@@ -66,12 +56,14 @@ func (r Runner) serve(ctx context.Context, config serveConfig, logger *appLogger
 			profileDir:  config.browserProfileDir,
 			clientOpts:  clientOptions,
 			timeout:     config.timeout,
+			dnsMode:     config.dnsMode,
+			dnsServers:  config.dnsServers,
 		}, logger)
 		if err != nil {
 			return err
 		}
-		defer tunnelDialer.Close()
-		dial = tunnelDialer.DialContext
+		defer supervisor.Close()
+		dial = supervisor.DialContext
 	}
 	listener, err := net.Listen("tcp", config.listenAddr)
 	if err != nil {
@@ -81,39 +73,22 @@ func (r Runner) serve(ctx context.Context, config serveConfig, logger *appLogger
 		}))
 	}
 	defer listener.Close()
+	if err := validateBoundListenAddress(listener.Addr(), config.allowNonLoopback, config.socksCredentials); err != nil {
+		return err
+	}
 	_, err = fmt.Fprintf(r.io.Stdout, "listening=%s\n", listener.Addr().String())
 	if err != nil {
 		return fmt.Errorf("write listen summary: %w", err)
 	}
-	server := socks5.NewServer(socks5.Config{DialContext: dial})
-	return server.Serve(ctx, listener)
-}
-
-func (r Runner) newTunnelDialer(ctx context.Context, options serveTunnelOptions, logger *appLogger) (*tunnel.Dialer, error) {
-	authenticated, err := r.authenticateGateway(ctx, options, logger)
-	if err != nil {
-		return nil, err
-	}
-	config, err := authenticated.client.GatewayConfig(ctx, authenticated.gateway, authenticated.session)
-	if err != nil {
-		return nil, fmt.Errorf("gateway config: %w", err)
-	}
-	localAddr, err := tunnelLocalAddr(config, authenticated.session)
-	if err != nil {
-		return nil, err
-	}
-	packetTunnel, err := r.packetTunnelConnector().ConnectPacketTunnel(ctx, PacketTunnelRequest{
-		Gateway: authenticated.gateway, Session: authenticated.session, Config: config,
+	server := socks5.NewServer(socks5.Config{
+		DialContext: dial, Credentials: config.socksCredentials,
+		HandshakeTimeout: config.handshakeTimeout, ConnectTimeout: config.connectTimeout,
+		MaxConnections: config.maxConnections,
 	})
-	if err != nil {
-		return nil, fmt.Errorf("connect packet tunnel: %w", err)
+	if supervisor == nil {
+		return server.Serve(ctx, listener)
 	}
-	dialer, err := tunnel.NewDialer(ctx, tunnel.Config{Tunnel: packetTunnel, LocalAddr: localAddr})
-	if err != nil {
-		_ = packetTunnel.Close()
-		return nil, fmt.Errorf("create tunnel dialer: %w", err)
-	}
-	return dialer, nil
+	return serveWithTunnelHealth(ctx, server, listener, supervisor)
 }
 
 func (r Runner) captureServeArtifact(ctx context.Context, request serveAuthRequest) (gp.AuthArtifact, error) {
@@ -159,43 +134,6 @@ func tunnelLocalAddr(config gp.TunnelConfig, session gp.GatewaySession) (netip.A
 		return netip.Addr{}, fmt.Errorf("gateway preferred ip %s: %w", addr, tunnel.ErrIPv6Unsupported)
 	}
 	return addr, nil
-}
-
-func (r Runner) packetTunnelConnector() PacketTunnelConnector {
-	if r.io.PacketTunnelConnector != nil {
-		return r.io.PacketTunnelConnector
-	}
-	return defaultPacketTunnelConnector{}
-}
-
-func (defaultPacketTunnelConnector) ConnectPacketTunnel(ctx context.Context, request PacketTunnelRequest) (tunnel.PacketTunnel, error) {
-	conn, err := dialGateway(ctx, request.Gateway)
-	if err != nil {
-		return nil, err
-	}
-	packetTunnel, err := gp.NewSSLPacketTunnel(ctx, conn, request.Session, request.Config)
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	return packetTunnel, nil
-}
-
-func dialGateway(ctx context.Context, gateway gp.PortalURL) (net.Conn, error) {
-	if gateway.Scheme() == "http" {
-		var dialer net.Dialer
-		conn, err := dialer.DialContext(ctx, "tcp", gateway.TCPAddress())
-		if err != nil {
-			return nil, fmt.Errorf("dial gateway %s: %w", gateway.TCPAddress(), err)
-		}
-		return conn, nil
-	}
-	dialer := tls.Dialer{Config: &tls.Config{MinVersion: tls.VersionTLS12, ServerName: gateway.Hostname()}}
-	conn, err := dialer.DialContext(ctx, "tcp", gateway.TCPAddress())
-	if err != nil {
-		return nil, fmt.Errorf("dial gateway %s: %w", gateway.TCPAddress(), err)
-	}
-	return conn, nil
 }
 
 func dialContext(ctx context.Context, network string, address string) (net.Conn, error) {

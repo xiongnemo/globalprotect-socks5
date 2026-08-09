@@ -42,7 +42,7 @@ func Test_Run_emitsSpecificSafeFailureMetadata(t *testing.T) {
 		},
 		{
 			name:      "listen bind failure",
-			args:      []string{"serve", "--listen", "LISTEN_ADDRESS_CANARY"},
+			args:      []string{"serve", "--listen", "127.0.0.1:LISTEN_ADDRESS_CANARY"},
 			command:   "serve",
 			stage:     "listener",
 			code:      "listen_failed",

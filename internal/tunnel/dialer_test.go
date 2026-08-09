@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"testing"
 
+	"github.com/xiongnemo/globalprotect-socks5/internal/netstatus"
 	"github.com/xiongnemo/globalprotect-socks5/internal/tunnel"
 )
 
@@ -31,9 +32,10 @@ func Test_Dialer_DialContext_proxiesTCPOverPacketTunnel_whenTargetIsDomain(t *te
 		return []netip.Addr{peerAddr}, nil
 	})
 	dialer, err := tunnel.NewDialer(ctx, tunnel.Config{
-		Tunnel:    clientPackets,
-		LocalAddr: clientAddr,
-		Resolver:  resolver,
+		Tunnel:     clientPackets,
+		LocalAddr:  clientAddr,
+		Resolver:   resolver,
+		DNSServers: []netip.Addr{netip.MustParseAddr("192.0.2.53")},
 	})
 	if err != nil {
 		t.Fatalf("NewDialer() error = %v", err)
@@ -82,6 +84,23 @@ func Test_Dialer_DialContext_rejectsIPv6UntilSupported(t *testing.T) {
 	// Then
 	if !errors.Is(err, tunnel.ErrIPv6Unsupported) {
 		t.Fatalf("error = %v, want ErrIPv6Unsupported", err)
+	}
+}
+
+func TestDialerClassifiesRealNetstackConnectionRefusal(t *testing.T) {
+	ctx := testContext(t)
+	clientPackets, peerPackets := newPacketTunnelPair()
+	clientAddr := netip.MustParseAddr("10.0.0.2")
+	peerAddr := netip.MustParseAddr("10.0.0.1")
+	_ = newPeerStack(t, ctx, peerPackets, peerAddr)
+	dialer, err := tunnel.NewDialer(ctx, tunnel.Config{Tunnel: clientPackets, LocalAddr: clientAddr})
+	if err != nil {
+		t.Fatalf("NewDialer() error = %v", err)
+	}
+	defer dialer.Close()
+	_, err = dialer.DialContext(ctx, "tcp4", "10.0.0.1:8080")
+	if !errors.Is(err, netstatus.ErrConnectionRefused) {
+		t.Fatalf("DialContext() error = %v, want classified connection refusal", err)
 	}
 }
 

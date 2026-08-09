@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -10,6 +11,7 @@ import (
 	"github.com/noisysockets/netstack/pkg/tcpip"
 	"github.com/noisysockets/netstack/pkg/tcpip/adapters/gonet"
 	"github.com/noisysockets/netstack/pkg/tcpip/network/ipv4"
+	"github.com/xiongnemo/globalprotect-socks5/internal/netstatus"
 )
 
 func (d *Dialer) DialContext(ctx context.Context, network string, address string) (net.Conn, error) {
@@ -28,13 +30,30 @@ func (d *Dialer) DialContext(ctx context.Context, network string, address string
 		if terminalErr := d.terminalError(); terminalErr != nil {
 			return nil, terminalErr
 		}
-		return nil, fmt.Errorf("dial %s through packet tunnel: %w", address, err)
+		return nil, fmt.Errorf("dial %s through packet tunnel: %w", address, classifyNetstackDialError(err))
 	}
 	if err := d.terminalError(); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
 	return conn, nil
+}
+
+func classifyNetstackDialError(err error) error {
+	var operation *net.OpError
+	if !errors.As(err, &operation) || operation.Err == nil {
+		return err
+	}
+	var kind netstatus.Kind
+	switch operation.Err.Error() {
+	case "connection was refused":
+		kind = netstatus.ConnectionRefused
+	case "network is unreachable":
+		kind = netstatus.NetworkUnreachable
+	case "no route to host":
+		kind = netstatus.HostUnreachable
+	}
+	return netstatus.Wrap(kind, err)
 }
 
 func ensureTCP4Network(network string) error {
