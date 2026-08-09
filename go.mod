@@ -6,6 +6,7 @@ require (
 	github.com/chromedp/cdproto v0.0.0-20250630014756-b7288190f53c
 	github.com/chromedp/chromedp v0.13.7
 	github.com/noisysockets/netstack v0.9.0
+	go.yaml.in/yaml/v3 v3.0.5
 )
 
 require (

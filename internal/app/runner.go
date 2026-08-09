@@ -3,12 +3,10 @@ package app
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/xiongnemo/globalprotect-socks5/internal/gp"
@@ -22,6 +20,9 @@ const defaultHTTPTimeout = 30 * time.Second
 type IO struct {
 	Stdout                io.Writer
 	Stderr                io.Writer
+	LogWriter             io.Writer
+	LookupEnv             func(string) (string, bool)
+	AutoConfig            bool
 	HTTPClient            *http.Client
 	AuthCapturer          AuthCapturer
 	DialContext           socks5.DialFunc
@@ -39,6 +40,12 @@ func NewRunner(ioConfig IO) Runner {
 	if ioConfig.Stderr == nil {
 		ioConfig.Stderr = os.Stderr
 	}
+	if ioConfig.LogWriter == nil {
+		ioConfig.LogWriter = ioConfig.Stderr
+	}
+	if ioConfig.LookupEnv == nil {
+		ioConfig.LookupEnv = func(string) (string, bool) { return "", false }
+	}
 	if ioConfig.HTTPClient == nil {
 		ioConfig.HTTPClient = &http.Client{Timeout: defaultHTTPTimeout}
 	}
@@ -49,21 +56,54 @@ func NewRunner(ioConfig IO) Runner {
 }
 
 func (r Runner) Run(ctx context.Context, args []string) error {
-	if len(args) == 0 {
-		return r.usage()
+	cli, err := parseCLIInvocation(args, r.io.Stderr)
+	if err != nil {
+		if errors.Is(err, ErrUsage) {
+			return r.usage()
+		}
+		if cli.command != "" {
+			r.logFailure(fail(cli.command, failureStageArguments, failureCodeInvalidArguments, err))
+		}
+		return err
 	}
-	switch args[0] {
-	case "auth":
-		return r.auth(ctx, args[1:])
-	case "parse-auth":
-		return r.parseAuth(args[1:])
-	case "probe":
-		return r.probe(ctx, args[1:])
-	case "serve":
-		return r.serve(ctx, args[1:])
-	default:
-		return r.usage()
+
+	prepared, err := r.prepareInvocation(cli)
+	if err != nil {
+		r.logFailure(classifyFailure(cli.command, failureMetadata{
+			stage: failureStageConfig,
+			code:  failureCodeInvalidConfiguration,
+		}, err))
+		return err
 	}
+	logger := newAppLogger(r.io.LogWriter, prepared.logLevel)
+	logger.debugCommandStarted(prepared.command)
+
+	switch prepared.command {
+	case commandAuth:
+		err = r.auth(ctx, prepared.auth)
+	case commandParseAuth:
+		err = r.parseAuth(prepared.arguments)
+	case commandProbe:
+		err = r.probe(ctx, prepared.probe)
+	case commandServe:
+		err = r.serve(ctx, prepared.serve, logger)
+	}
+	if err != nil {
+		if !errors.Is(err, ErrUsage) {
+			logger.errorCommandFailed(classifyFailure(prepared.command, failureMetadata{
+				stage: failureStageExecution,
+				code:  failureCodeCommandFailed,
+			}, err))
+		}
+		return err
+	}
+	logger.infoCommandCompleted(prepared.command)
+	return nil
+}
+
+func (r Runner) logFailure(failure *commandFailure) {
+	logger := newDefaultAppLogger(r.io.LogWriter)
+	logger.errorCommandFailed(failure)
 }
 
 func (r Runner) parseAuth(args []string) error {
@@ -77,62 +117,8 @@ func (r Runner) parseAuth(args []string) error {
 	return r.writeAuthSummary(artifact)
 }
 
-func (r Runner) probe(ctx context.Context, args []string) (err error) {
-	flags := flag.NewFlagSet("probe", flag.ContinueOnError)
-	flags.SetOutput(r.io.Stderr)
-	portalRaw := flags.String("portal", "", "GlobalProtect portal URL")
-	hostID := flags.String("host-id", "gp-socks", "stable GlobalProtect host-id")
-	ssoFile := flags.String("sso-file", "", "write SAML POST HTML to this file")
-	debugLogPath := flags.String("debug-log", "", "write redacted GlobalProtect HTTP debug JSONL to this file")
-	if err := flags.Parse(args); err != nil {
-		return fmt.Errorf("parse probe flags: %w", err)
-	}
-	debugLog, clientOptions, err := openDebugLog(*debugLogPath)
-	if err != nil {
-		return err
-	}
-	defer closeDebugLog(debugLog, *debugLogPath, &err)
-	portal, err := gp.NewPortalURL(*portalRaw)
-	if err != nil {
-		return fmt.Errorf("portal: %w", err)
-	}
-	client := gp.NewClient(r.io.HTTPClient, gp.ClientProfile{HostID: *hostID, Computer: "gp-socks", ClientOS: gp.ClientOSLinux}, clientOptions...)
-	prelogin, err := client.Prelogin(ctx, portal)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(r.io.Stdout, "auth=%s method=%s default_browser=%t region=%s\n", prelogin.AuthMode, prelogin.SAMLMethod, prelogin.DefaultBrowser, prelogin.Region)
-	if err != nil {
-		return fmt.Errorf("write probe summary: %w", err)
-	}
-	if prelogin.SAMLRequest.String() != "" && prelogin.SAMLMethod == gp.SAMLPost && *ssoFile != "" {
-		if err := os.WriteFile(*ssoFile, []byte(prelogin.SAMLRequest.String()), 0o600); err != nil {
-			return fmt.Errorf("write sso file: %w", err)
-		}
-		_, err = fmt.Fprintf(r.io.Stdout, "sso_file=%s\n", *ssoFile)
-		if err != nil {
-			return fmt.Errorf("write sso file path: %w", err)
-		}
-		return nil
-	}
-	if prelogin.SAMLRequest.String() != "" {
-		_, err = fmt.Fprintf(r.io.Stdout, "sso_url=%s\n", summarizeSSORequest(prelogin.SAMLRequest.String()))
-		if err != nil {
-			return fmt.Errorf("write sso url: %w", err)
-		}
-	}
-	return nil
-}
-
-func summarizeSSORequest(raw string) string {
-	if strings.HasPrefix(strings.TrimSpace(raw), "<") {
-		return "<SAML POST HTML; rerun with --sso-file to save>"
-	}
-	return raw
-}
-
 func (r Runner) usage() error {
-	_, err := fmt.Fprintln(r.io.Stderr, "usage: gp-socks <auth|parse-auth|probe|serve> [options]")
+	_, err := fmt.Fprintln(r.io.Stderr, "usage: gp-socks [--config FILE | --no-config] [--log-level LEVEL] <auth|parse-auth|probe|serve> [options]")
 	if err != nil {
 		return fmt.Errorf("write usage: %w", err)
 	}

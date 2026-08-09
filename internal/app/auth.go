@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"time"
 
@@ -16,33 +15,21 @@ type AuthCapturer interface {
 	Capture(context.Context, browserauth.Request) (gp.AuthArtifact, error)
 }
 
-func (r Runner) auth(ctx context.Context, args []string) (err error) {
-	flags := flag.NewFlagSet("auth", flag.ContinueOnError)
-	flags.SetOutput(r.io.Stderr)
-	portalRaw := flags.String("portal", "", "GlobalProtect portal URL")
-	hostID := flags.String("host-id", "gp-socks", "stable GlobalProtect host-id")
-	browserRaw := flags.String("browser", string(browserauth.BrowserAuto), "browser: auto, chrome, or edge")
-	browserPath := flags.String("browser-path", "", "explicit Chrome or Edge executable path")
-	browserProfileDir := flags.String("browser-profile-dir", "", "explicit persistent Chrome/Edge profile directory for browser SSO")
-	timeout := flags.Duration("timeout", defaultBrowserAuthTimeout, "maximum time to wait for browser SSO")
-	debugLogPath := flags.String("debug-log", "", "write redacted GlobalProtect HTTP debug JSONL to this file")
-	if err := flags.Parse(args); err != nil {
-		return fmt.Errorf("parse auth flags: %w", err)
-	}
-	debugLog, clientOptions, err := openDebugLog(*debugLogPath)
+func (r Runner) auth(ctx context.Context, config authConfig) (err error) {
+	debugLog, clientOptions, err := openDebugLog(config.debugLogPath)
 	if err != nil {
 		return err
 	}
-	defer closeDebugLog(debugLog, *debugLogPath, &err)
-	browser, err := browserauth.ParseBrowser(*browserRaw)
+	defer closeDebugLog(debugLog, config.debugLogPath, &err)
+	browser, err := browserauth.ParseBrowser(config.browserRaw)
 	if err != nil {
 		return err
 	}
-	portal, err := gp.NewPortalURL(*portalRaw)
+	portal, err := gp.NewPortalURL(config.portalRaw)
 	if err != nil {
 		return fmt.Errorf("portal: %w", err)
 	}
-	client := gp.NewClient(r.io.HTTPClient, gp.ClientProfile{HostID: *hostID, Computer: "gp-socks", ClientOS: gp.ClientOSLinux}, clientOptions...)
+	client := gp.NewClient(r.io.HTTPClient, gp.ClientProfile{HostID: config.hostID, Computer: "gp-socks", ClientOS: gp.ClientOSLinux}, clientOptions...)
 	prelogin, err := client.Prelogin(ctx, portal)
 	if err != nil {
 		return err
@@ -53,9 +40,9 @@ func (r Runner) auth(ctx context.Context, args []string) (err error) {
 	artifact, err := r.authCapturer().Capture(ctx, browserauth.Request{
 		Prelogin:    prelogin,
 		Browser:     browser,
-		BrowserPath: *browserPath,
-		ProfileDir:  *browserProfileDir,
-		Timeout:     *timeout,
+		BrowserPath: config.browserPath,
+		ProfileDir:  config.browserProfileDir,
+		Timeout:     config.timeout,
 	})
 	if err != nil {
 		return fmt.Errorf("capture browser auth: %w", err)

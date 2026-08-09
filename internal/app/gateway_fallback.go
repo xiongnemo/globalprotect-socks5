@@ -16,7 +16,7 @@ type gatewayLoginRequest struct {
 	options  serveTunnelOptions
 }
 
-func (r Runner) gatewayLoginWithFallback(ctx context.Context, request gatewayLoginRequest) (gp.GatewaySession, error) {
+func (r Runner) gatewayLoginWithFallback(ctx context.Context, request gatewayLoginRequest, logger *appLogger) (gp.GatewaySession, error) {
 	session, err := request.client.GatewayLogin(ctx, request.gateway, request.artifact)
 	if err == nil {
 		return session, nil
@@ -24,6 +24,7 @@ func (r Runner) gatewayLoginWithFallback(ctx context.Context, request gatewayLog
 	if !errors.Is(err, gp.ErrGatewayAuthFailed) {
 		return gp.GatewaySession{}, fmt.Errorf("gateway login: %w", err)
 	}
+	logger.warnGatewayFallback()
 	prelogin, err := request.client.GatewayPrelogin(ctx, request.gateway)
 	if err != nil {
 		return gp.GatewaySession{}, fmt.Errorf("gateway prelogin: %w", err)

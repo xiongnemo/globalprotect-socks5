@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,13 +12,22 @@ import (
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	runner := app.NewRunner(app.IO{})
-	if err := runner.Run(ctx, os.Args[1:]); err != nil {
-		if errors.Is(err, app.ErrUsage) {
-			os.Exit(2)
-		}
-		slog.Error("fatal", slog.Any("err", err))
-		os.Exit(1)
+	code := run(ctx, os.Args[1:], app.IO{LookupEnv: os.LookupEnv, LogWriter: os.Stderr, AutoConfig: true})
+	stop()
+	os.Exit(code)
+}
+
+func run(ctx context.Context, args []string, ioConfig app.IO) int {
+	runner := app.NewRunner(ioConfig)
+	return exitCode(runner.Run(ctx, args))
+}
+
+func exitCode(err error) int {
+	if err == nil {
+		return 0
 	}
+	if errors.Is(err, app.ErrUsage) {
+		return 2
+	}
+	return 1
 }

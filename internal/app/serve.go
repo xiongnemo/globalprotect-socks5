@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"crypto/tls"
-	"flag"
 	"fmt"
 	"net"
 	"net/netip"
@@ -45,51 +44,40 @@ type serveAuthRequest struct {
 	options serveTunnelOptions
 }
 
-func (r Runner) serve(ctx context.Context, args []string) (err error) {
-	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
-	flags.SetOutput(r.io.Stderr)
-	listenAddr := flags.String("listen", "127.0.0.1:1080", "SOCKS5 listen address")
-	portalRaw := flags.String("portal", "", "GlobalProtect portal URL; enables VPN-backed egress")
-	gatewayRaw := flags.String("gateway", "", "GlobalProtect gateway URL; overrides portal-selected gateway")
-	hostID := flags.String("host-id", "gp-socks", "stable GlobalProtect host-id")
-	browserRaw := flags.String("browser", string(browserauth.BrowserAuto), "browser: auto, chrome, or edge")
-	browserPath := flags.String("browser-path", "", "explicit Chrome or Edge executable path")
-	browserProfileDir := flags.String("browser-profile-dir", "", "explicit persistent Chrome/Edge profile directory for browser SSO")
-	timeout := flags.Duration("timeout", defaultBrowserAuthTimeout, "maximum time to wait for browser SSO")
-	debugLogPath := flags.String("debug-log", "", "write redacted GlobalProtect HTTP debug JSONL to this file")
-	if err := flags.Parse(args); err != nil {
-		return fmt.Errorf("parse serve flags: %w", err)
-	}
-	debugLog, clientOptions, err := openDebugLog(*debugLogPath)
+func (r Runner) serve(ctx context.Context, config serveConfig, logger *appLogger) (err error) {
+	debugLog, clientOptions, err := openDebugLog(config.debugLogPath)
 	if err != nil {
 		return err
 	}
-	defer closeDebugLog(debugLog, *debugLogPath, &err)
-	browser, err := browserauth.ParseBrowser(*browserRaw)
+	defer closeDebugLog(debugLog, config.debugLogPath, &err)
+	browser, err := browserauth.ParseBrowser(config.browserRaw)
 	if err != nil {
 		return err
 	}
 	dial := r.io.DialContext
-	if strings.TrimSpace(*portalRaw) != "" {
+	if strings.TrimSpace(config.portalRaw) != "" {
 		tunnelDialer, err := r.newTunnelDialer(ctx, serveTunnelOptions{
-			portalRaw:   *portalRaw,
-			gatewayRaw:  *gatewayRaw,
-			hostID:      *hostID,
+			portalRaw:   config.portalRaw,
+			gatewayRaw:  config.gatewayRaw,
+			hostID:      config.hostID,
 			browser:     browser,
-			browserPath: *browserPath,
-			profileDir:  *browserProfileDir,
+			browserPath: config.browserPath,
+			profileDir:  config.browserProfileDir,
 			clientOpts:  clientOptions,
-			timeout:     *timeout,
-		})
+			timeout:     config.timeout,
+		}, logger)
 		if err != nil {
 			return err
 		}
 		defer tunnelDialer.Close()
 		dial = tunnelDialer.DialContext
 	}
-	listener, err := net.Listen("tcp", *listenAddr)
+	listener, err := net.Listen("tcp", config.listenAddr)
 	if err != nil {
-		return fmt.Errorf("listen %s: %w", *listenAddr, err)
+		return fmt.Errorf("listen %s: %w", config.listenAddr, withFailureMetadata(err, failureMetadata{
+			stage: failureStageListener,
+			code:  failureCodeListenFailed,
+		}))
 	}
 	defer listener.Close()
 	_, err = fmt.Fprintf(r.io.Stdout, "listening=%s\n", listener.Addr().String())
@@ -100,7 +88,7 @@ func (r Runner) serve(ctx context.Context, args []string) (err error) {
 	return server.Serve(ctx, listener)
 }
 
-func (r Runner) newTunnelDialer(ctx context.Context, options serveTunnelOptions) (*tunnel.Dialer, error) {
+func (r Runner) newTunnelDialer(ctx context.Context, options serveTunnelOptions, logger *appLogger) (*tunnel.Dialer, error) {
 	portal, err := gp.NewPortalURL(options.portalRaw)
 	if err != nil {
 		return nil, fmt.Errorf("portal: %w", err)
@@ -114,7 +102,7 @@ func (r Runner) newTunnelDialer(ctx context.Context, options serveTunnelOptions)
 	if err != nil {
 		return nil, err
 	}
-	session, err := r.gatewayLoginWithFallback(ctx, gatewayLoginRequest{client: client, gateway: material.gateway, artifact: material.artifact, options: options})
+	session, err := r.gatewayLoginWithFallback(ctx, gatewayLoginRequest{client: client, gateway: material.gateway, artifact: material.artifact, options: options}, logger)
 	if err != nil {
 		return nil, err
 	}
