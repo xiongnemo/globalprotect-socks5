@@ -1,0 +1,29 @@
+# Copy this file to config.yaml in the directory where gp-socks runs.
+# Environment variables override these values; explicit CLI flags override both.
+log_level: "error"
+
+probe:
+  portal: ""
+  host_id: "gp-socks"
+  sso_file: ""
+  debug_log: ""
+
+auth:
+  portal: ""
+  host_id: "gp-socks"
+  browser: "auto"
+  browser_path: ""
+  browser_profile_dir: ""
+  timeout: "5m"
+  debug_log: ""
+
+serve:
+  listen: "127.0.0.1:1080"
+  portal: ""
+  gateway: ""
+  host_id: "gp-socks"
+  browser: "auto"
+  browser_path: ""
+  browser_profile_dir: ""
+  timeout: "5m"
+  debug_log: ""

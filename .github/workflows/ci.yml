@@ -190,7 +190,9 @@ jobs:
           while IFS= read -r asset; do
             test -s "dist/${asset}"
           done <<< "$expected"
-          (cd dist && sha256sum gp-socks-* | sort -k2 > SHA256SUMS)
+          test -s config.yaml.template
+          cp config.yaml.template dist/config.yaml.template
+          (cd dist && sha256sum config.yaml.template gp-socks-* | sort -k2 > SHA256SUMS)
 
       - name: Publish idempotent prerelease
         shell: bash
