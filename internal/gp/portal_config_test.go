@@ -13,6 +13,7 @@ func Test_ParsePortalConfig_returnsPortalCookieAndExternalGateways_whenPolicyLis
 	// Given
 	body := []byte(`<policy>` +
 		`<portal-userauthcookie>portal-cookie</portal-userauthcookie>` +
+		`<portal-prelogonuserauthcookie>prelogon-cookie</portal-prelogonuserauthcookie>` +
 		`<gateways><external><list>` +
 		`<entry name=" gw1.example.test "><description>Primary</description></entry>` +
 		`<entry name="https://gw2.example.test"><description>Secondary</description></entry>` +
@@ -28,6 +29,9 @@ func Test_ParsePortalConfig_returnsPortalCookieAndExternalGateways_whenPolicyLis
 	}
 	if config.PortalUserAuthCookie.String() != "portal-cookie" {
 		t.Fatalf("PortalUserAuthCookie = %q, want portal-cookie", config.PortalUserAuthCookie.String())
+	}
+	if config.PortalPrelogonUserAuthCookie.String() != "prelogon-cookie" {
+		t.Fatalf("PortalPrelogonUserAuthCookie = %q, want prelogon-cookie", config.PortalPrelogonUserAuthCookie.String())
 	}
 	if len(config.ExternalGateways) != 2 {
 		t.Fatalf("ExternalGateways = %#v, want two gateways", config.ExternalGateways)
@@ -46,7 +50,14 @@ func Test_Client_PortalConfig_postsGetConfigFields_whenPreloginCookieProvided(t 
 	if err != nil {
 		t.Fatalf("NewSecret() error = %v", err)
 	}
-	artifact := gp.AuthArtifact{Kind: gp.ArtifactSAML, Username: "alice@example.test", PreloginCookie: preloginCookie}
+	artifact := gp.AuthArtifact{
+		Kind:                         gp.ArtifactSAML,
+		Username:                     "alice@example.test",
+		PreloginCookie:               preloginCookie,
+		Token:                        mustSecret(t, "request-token"),
+		PortalUserAuthCookie:         mustSecret(t, "request-user-cookie"),
+		PortalPrelogonUserAuthCookie: mustSecret(t, "request-prelogon-cookie"),
+	}
 	var portal gp.PortalURL
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -71,7 +82,9 @@ func Test_Client_PortalConfig_postsGetConfigFields_whenPreloginCookieProvided(t 
 			"serialno":                      "test-host",
 			"os-version":                    "linux",
 			"clientgpversion":               "4.1.0.98",
-			"portal-prelogonuserauthcookie": "empty",
+			"portal-userauthcookie":         "request-user-cookie",
+			"portal-prelogonuserauthcookie": "request-prelogon-cookie",
+			"token":                         "request-token",
 			"csc-digest":                    "",
 			"config-digest":                 "",
 			"swg-auth-token":                "0",
@@ -81,7 +94,7 @@ func Test_Client_PortalConfig_postsGetConfigFields_whenPreloginCookieProvided(t 
 				t.Fatalf("%s = %q, want %q", field, got, want)
 			}
 		}
-		for _, field := range []string{"clientVer", "clientgpversion", "clientos", "computer", "direct", "host", "host-id", "inputStr", "ipv6-support", "jnlpReady", "ok", "os-version", "portal-prelogonuserauthcookie", "prelogin-cookie", "prot", "serialno", "server"} {
+		for _, field := range []string{"clientVer", "clientgpversion", "clientos", "computer", "direct", "host", "host-id", "inputStr", "ipv6-support", "jnlpReady", "ok", "os-version", "portal-prelogonuserauthcookie", "portal-userauthcookie", "prelogin-cookie", "prot", "serialno", "server", "token"} {
 			if !r.Form.Has(field) {
 				t.Fatalf("form missing %s: %#v", field, r.Form)
 			}
@@ -91,6 +104,7 @@ func Test_Client_PortalConfig_postsGetConfigFields_whenPreloginCookieProvided(t 
 		}
 		_, _ = w.Write([]byte(`<policy>` +
 			`<portal-userauthcookie>portal-cookie</portal-userauthcookie>` +
+			`<portal-prelogonuserauthcookie>prelogon-cookie</portal-prelogonuserauthcookie>` +
 			`<gateways><external><list><entry name="gw.example.test"><description>Gateway</description></entry></list></external></gateways>` +
 			`</policy>`))
 	}))
@@ -108,7 +122,49 @@ func Test_Client_PortalConfig_postsGetConfigFields_whenPreloginCookieProvided(t 
 	if config.PortalUserAuthCookie.String() != "portal-cookie" {
 		t.Fatalf("PortalUserAuthCookie = %q, want portal-cookie", config.PortalUserAuthCookie.String())
 	}
+	if config.PortalPrelogonUserAuthCookie.String() != "prelogon-cookie" {
+		t.Fatalf("PortalPrelogonUserAuthCookie = %q, want prelogon-cookie", config.PortalPrelogonUserAuthCookie.String())
+	}
 	if len(config.ExternalGateways) != 1 || config.ExternalGateways[0].Name != "gw.example.test" {
 		t.Fatalf("ExternalGateways = %#v, want gw.example.test", config.ExternalGateways)
+	}
+}
+
+func Test_ParsePortalConfig_mergesNestedPolicyCookiesWithRootGateways(t *testing.T) {
+	// Given
+	body := []byte(`<response><policy>` +
+		`<portal-userauthcookie>nested-user-cookie</portal-userauthcookie>` +
+		`<portal-prelogonuserauthcookie>nested-prelogon-cookie</portal-prelogonuserauthcookie>` +
+		`</policy><gateways><external><list><entry name="gw.example.test"/></list></external></gateways></response>`)
+
+	// When
+	config, err := gp.ParsePortalConfig(body)
+
+	// Then
+	if err != nil {
+		t.Fatalf("ParsePortalConfig() error = %v", err)
+	}
+	if config.PortalUserAuthCookie.String() != "nested-user-cookie" ||
+		config.PortalPrelogonUserAuthCookie.String() != "nested-prelogon-cookie" {
+		t.Fatalf("portal cookies = (%q, %q), want nested policy cookies",
+			config.PortalUserAuthCookie.String(), config.PortalPrelogonUserAuthCookie.String())
+	}
+	if len(config.ExternalGateways) != 1 || config.ExternalGateways[0].Name != "gw.example.test" {
+		t.Fatalf("ExternalGateways = %#v, want root gateway", config.ExternalGateways)
+	}
+}
+
+func Test_ParsePortalConfig_allowsGatewaySAML_whenPortalCookiesAreAbsent(t *testing.T) {
+	// When
+	config, err := gp.ParsePortalConfig([]byte(`<policy><gateways><external><list>` +
+		`<entry name="gw.example.test"/></list></external></gateways></policy>`))
+
+	// Then
+	if err != nil {
+		t.Fatalf("ParsePortalConfig() error = %v", err)
+	}
+	if config.PortalUserAuthCookie.String() != "" || config.PortalPrelogonUserAuthCookie.String() != "" {
+		t.Fatalf("portal cookies = (%q, %q), want absent",
+			config.PortalUserAuthCookie.String(), config.PortalPrelogonUserAuthCookie.String())
 	}
 }

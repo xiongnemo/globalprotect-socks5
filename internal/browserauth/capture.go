@@ -30,28 +30,17 @@ type captureResult struct {
 type responseBodyReader func(context.Context, network.RequestID) (string, error)
 
 func (c Capturer) Capture(ctx context.Context, request Request) (artifact gp.AuthArtifact, err error) {
-	if request.Prelogin.AuthMode != gp.AuthModeSAML || request.Prelogin.SAMLRequest.String() == "" {
-		return gp.AuthArtifact{}, fmt.Errorf("browser auth prelogin: %w", gp.ErrInvalidPrelogin)
-	}
-	browserPath, err := c.finder.find(request.Browser, request.BrowserPath)
-	if err != nil {
-		return gp.AuthArtifact{}, err
-	}
-	profile, err := captureProfileDir(request.ProfileDir)
-	if err != nil {
-		return gp.AuthArtifact{}, err
-	}
+	session := c.NewCaptureSession(ctx)
 	defer func() {
-		if cleanupErr := profile.cleanup(); cleanupErr != nil && err == nil {
-			err = cleanupErr
+		if closeErr := session.Close(); closeErr != nil {
+			if err == nil {
+				err = closeErr
+			} else {
+				err = errors.Join(err, closeErr)
+			}
 		}
 	}()
-
-	target, err := navigationURL(request.Prelogin, profile.dir)
-	if err != nil {
-		return gp.AuthArtifact{}, err
-	}
-	return c.runner(ctx, browserRunRequest{browserPath: browserPath, profileDir: profile.dir, target: target, timeout: request.Timeout})
+	return session.Capture(ctx, request)
 }
 
 func listenForResponses(events chan<- responseEvent, results chan<- captureResult) func(any) {

@@ -67,11 +67,12 @@ func (r SAMLRequest) String() string {
 }
 
 type AuthArtifact struct {
-	Kind                 ArtifactKind
-	Username             string
-	Token                Secret
-	PreloginCookie       Secret
-	PortalUserAuthCookie Secret
+	Kind                         ArtifactKind
+	Username                     string
+	Token                        Secret
+	PreloginCookie               Secret
+	PortalUserAuthCookie         Secret
+	PortalPrelogonUserAuthCookie Secret
 }
 
 type Prelogin struct {

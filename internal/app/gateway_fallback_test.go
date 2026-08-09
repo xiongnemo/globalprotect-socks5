@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -112,8 +114,8 @@ func Test_Run_serveFallsBackToGatewaySAML_whenPortalCookieRejectedWith512(t *tes
 	wantEndpoints := []string{
 		"portal:/global-protect/prelogin.esp",
 		"portal:/global-protect/getconfig.esp",
-		"gateway:/ssl-vpn/login.esp",
 		"gateway:/ssl-vpn/prelogin.esp",
+		"gateway:/ssl-vpn/login.esp",
 		"gateway:/ssl-vpn/login.esp",
 		"gateway:/ssl-vpn/getconfig.esp",
 	}
@@ -123,14 +125,17 @@ func Test_Run_serveFallsBackToGatewaySAML_whenPortalCookieRejectedWith512(t *tes
 	if initialLoginForm.Get("portal-userauthcookie") != "portal-cookie" {
 		t.Fatal("initial gateway login did not use the portal user auth cookie")
 	}
-	if initialLoginForm.Has("prelogin-cookie") {
-		t.Fatalf("initial gateway login included prelogin-cookie fields: %#v", formKeys(initialLoginForm))
+	if initialLoginForm.Get("portal-prelogonuserauthcookie") != "portal-prelogon-cookie" {
+		t.Fatal("initial gateway login did not use the portal prelogon auth cookie")
+	}
+	if !initialLoginForm.Has("prelogin-cookie") || initialLoginForm.Get("prelogin-cookie") != "" {
+		t.Fatalf("initial gateway login prelogin-cookie fields = %#v, want present and empty", formKeys(initialLoginForm))
 	}
 	if retryLoginForm.Get("prelogin-cookie") != "gateway-pre-cookie" {
 		t.Fatal("gateway retry login did not use the gateway prelogin cookie")
 	}
-	if retryLoginForm.Has("portal-userauthcookie") {
-		t.Fatalf("gateway retry login included portal cookie fields: %#v", formKeys(retryLoginForm))
+	if retryLoginForm.Get("portal-userauthcookie") != "empty" || retryLoginForm.Get("portal-prelogonuserauthcookie") != "empty" {
+		t.Fatalf("gateway retry portal cookie sentinels = %#v, want empty", retryLoginForm)
 	}
 	if captureRequests[0].Prelogin.SAMLRequest.String() != portalHTML {
 		t.Fatal("initial capture did not receive portal SAML prelogin")
@@ -146,6 +151,12 @@ func Test_Run_serveFallsBackToGatewaySAML_whenPortalCookieRejectedWith512(t *tes
 	}
 	if captureRequests[1].ProfileDir != captureRequests[0].ProfileDir {
 		t.Fatalf("fallback profile dir = %q, want same profile dir", captureRequests[1].ProfileDir)
+	}
+	if captureRequests[0].ProfileDir == "" || !filepath.IsAbs(captureRequests[0].ProfileDir) {
+		t.Fatalf("shared profile dir = %q, want non-empty absolute temp directory", captureRequests[0].ProfileDir)
+	}
+	if _, err := os.Stat(captureRequests[0].ProfileDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("temporary profile stat error = %v, want profile removed after authentication", err)
 	}
 	if captureRequests[1].Timeout != captureRequests[0].Timeout || captureRequests[1].Timeout != time.Second {
 		t.Fatalf("fallback timeout = %s, want initial timeout", captureRequests[1].Timeout)
@@ -174,13 +185,14 @@ func Test_Run_serveReturnsGatewayLoginError_whenGatewayLoginFailureIsNotSentinel
 	gatewayServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		endpoints.record("gateway:" + request.URL.Path)
 		switch request.URL.Path {
+		case "/ssl-vpn/prelogin.esp":
+			encoded := base64.StdEncoding.EncodeToString([]byte(portalHTML))
+			_, _ = response.Write(preloginResponse(encoded))
 		case "/ssl-vpn/login.esp":
 			response.WriteHeader(http.StatusInternalServerError)
 			_, _ = response.Write([]byte(`<response><status>error</status><msg>temporary gateway failure</msg></response>`))
-		case "/ssl-vpn/prelogin.esp":
-			t.Fatal("gateway prelogin was called after a non-sentinel login failure")
 		default:
-			t.Fatalf("gateway path = %s, want initial login only", request.URL.Path)
+			t.Fatalf("gateway path = %s, want prelogin then initial login", request.URL.Path)
 		}
 	}))
 	defer gatewayServer.Close()
@@ -213,6 +225,7 @@ func Test_Run_serveReturnsGatewayLoginError_whenGatewayLoginFailureIsNotSentinel
 	wantEndpoints := []string{
 		"portal:/global-protect/prelogin.esp",
 		"portal:/global-protect/getconfig.esp",
+		"gateway:/ssl-vpn/prelogin.esp",
 		"gateway:/ssl-vpn/login.esp",
 	}
 	gotEndpoints := endpoints.wait(t, len(wantEndpoints))

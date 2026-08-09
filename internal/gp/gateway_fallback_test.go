@@ -91,7 +91,7 @@ func Test_Client_GatewayPrelogin_postsGatewayEndpointAndParsesSAML(t *testing.T)
 	}
 }
 
-func Test_Client_GatewayLogin_usesOnlyPreloginCookie_whenGatewayCookieSupplied(t *testing.T) {
+func Test_Client_GatewayLogin_usesPreloginCookieAndEmptyPortalSentinels_whenGatewayCookieSupplied(t *testing.T) {
 	// Given
 	preloginCookie, err := gp.NewSecret("gateway-cookie")
 	if err != nil {
@@ -105,8 +105,10 @@ func Test_Client_GatewayLogin_usesOnlyPreloginCookie_whenGatewayCookieSupplied(t
 		if got := r.Form.Get("prelogin-cookie"); got != "gateway-cookie" {
 			t.Fatalf("prelogin-cookie = %q, want gateway-cookie", got)
 		}
-		if r.Form.Has("portal-userauthcookie") {
-			t.Fatalf("portal-userauthcookie was sent with gateway cookie form: %#v", r.Form)
+		for _, field := range []string{"portal-userauthcookie", "portal-prelogonuserauthcookie"} {
+			if got := r.Form.Get(field); got != "empty" {
+				t.Fatalf("%s = %q, want empty sentinel", field, got)
+			}
 		}
 		_, _ = w.Write([]byte(`<jnlp><application-desc>` +
 			`<argument></argument>` +

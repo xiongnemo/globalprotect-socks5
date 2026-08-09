@@ -2,11 +2,10 @@ package browserauth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
-	"github.com/chromedp/cdproto/network"
-	"github.com/chromedp/chromedp"
 	"github.com/xiongnemo/globalprotect-socks5/internal/gp"
 )
 
@@ -22,37 +21,21 @@ type browserRunRequest struct {
 }
 
 func runBrowserCapture(ctx context.Context, request browserRunRequest) (gp.AuthArtifact, error) {
-	captureCtx, cancel := context.WithTimeout(ctx, captureTimeout(request.timeout))
-	defer cancel()
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.ExecPath(request.browserPath),
-		chromedp.UserDataDir(request.profileDir),
-		chromedp.Flag("headless", false),
-	)
-	allocCtx, allocCancel := chromedp.NewExecAllocator(captureCtx, opts...)
-	defer allocCancel()
-	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
-	defer browserCancel()
-
-	events := make(chan responseEvent, 128)
-	results := make(chan captureResult, 1)
-	listenCtx, listenCancel := context.WithCancel(browserCtx)
-	defer listenCancel()
-	chromedp.ListenTarget(listenCtx, listenForResponses(events, results))
-	go collectArtifacts(listenCtx, browserCtx, events, results, readResponseBody)
-
-	if err := chromedp.Run(browserCtx, network.Enable(), chromedp.Navigate(request.target)); err != nil {
-		return gp.AuthArtifact{}, fmt.Errorf("start browser auth: %w", err)
+	runtime, err := newChromedpRuntime(ctx, browserRuntimeConfig{
+		browserPath: request.browserPath,
+		profileDir:  request.profileDir,
+	})
+	if err != nil {
+		return gp.AuthArtifact{}, err
 	}
-	select {
-	case result := <-results:
-		if result.err != nil {
-			return gp.AuthArtifact{}, result.err
-		}
-		return result.artifact, nil
-	case <-captureCtx.Done():
-		return gp.AuthArtifact{}, fmt.Errorf("capture auth artifact: %w", captureCtx.Err())
+	artifact, captureErr := runtime.capture(ctx, runtimeCaptureRequest{
+		target: request.target, timeout: request.timeout,
+	})
+	closeErr := runtime.close()
+	if closeErr != nil {
+		closeErr = fmt.Errorf("close browser runtime: %w", closeErr)
 	}
+	return artifact, errors.Join(captureErr, closeErr)
 }
 
 func captureTimeout(timeout time.Duration) time.Duration {

@@ -25,7 +25,9 @@ func Test_Run_serveWritesRedactedDebugLog_whenGatewayLoginRejected(t *testing.T)
 		case "/global-protect/prelogin.esp":
 			_, _ = w.Write([]byte(`<prelogin-response><saml-auth-method>POST</saml-auth-method><saml-request>` + encoded + `</saml-request><saml-default-browser>yes</saml-default-browser></prelogin-response>`))
 		case "/global-protect/getconfig.esp":
-			_, _ = w.Write([]byte(`<policy><portal-userauthcookie>portal-cookie</portal-userauthcookie><gateways><external><list><entry name="http://` + r.Host + `"><description>Gateway</description></entry></list></external></gateways></policy>`))
+			_, _ = w.Write(portalPolicyResponse("http://" + r.Host))
+		case "/ssl-vpn/prelogin.esp":
+			_, _ = w.Write(gatewaySAMLPreloginResponse())
 		case "/ssl-vpn/login.esp":
 			if err := r.ParseForm(); err != nil {
 				t.Fatalf("ParseForm() error = %v", err)
@@ -34,7 +36,10 @@ func Test_Run_serveWritesRedactedDebugLog_whenGatewayLoginRejected(t *testing.T)
 				t.Fatalf("portal-userauthcookie = %q, want portal-cookie", got)
 			}
 			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = w.Write([]byte(`<response><error>gateway rejected login</error><portal-userauthcookie>portal-cookie</portal-userauthcookie><saml-request>secret-saml-request</saml-request></response>`))
+			_, _ = w.Write([]byte(`<response><error>gateway rejected login</error>` +
+				`<portal-userauthcookie>portal-cookie</portal-userauthcookie>` +
+				`<portal-prelogonuserauthcookie>portal-prelogon-cookie</portal-prelogonuserauthcookie>` +
+				`<saml-request>secret-saml-request</saml-request></response>`))
 		default:
 			t.Fatalf("path = %s, want GlobalProtect endpoint", r.URL.Path)
 		}
@@ -57,6 +62,12 @@ func Test_Run_serveWritesRedactedDebugLog_whenGatewayLoginRejected(t *testing.T)
 	if !errors.Is(err, gp.ErrInvalidAuthArtifact) {
 		t.Fatalf("Run() error = %v, want ErrInvalidAuthArtifact", err)
 	}
+	if capturer.request.ProfileDir == "" {
+		t.Fatal("portal capture profile dir is empty")
+	}
+	if _, statErr := os.Stat(capturer.request.ProfileDir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("temporary profile stat error = %v, want removed after authentication failure", statErr)
+	}
 	logBytes, err := os.ReadFile(debugPath)
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
@@ -67,7 +78,7 @@ func Test_Run_serveWritesRedactedDebugLog_whenGatewayLoginRejected(t *testing.T)
 			t.Fatalf("debug log = %q, want %q", logText, want)
 		}
 	}
-	for _, secret := range []string{"pre-cookie", "portal-cookie", "secret-saml-request"} {
+	for _, secret := range []string{"pre-cookie", "portal-cookie", "portal-prelogon-cookie", "secret-saml-request"} {
 		if strings.Contains(logText, secret) {
 			t.Fatalf("debug log leaked %q: %q", secret, logText)
 		}

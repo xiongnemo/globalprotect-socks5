@@ -58,5 +58,9 @@ func gatewayURL(portal gp.PortalURL, raw string) (gp.PortalURL, error) {
 }
 
 func portalGatewayArtifact(artifact gp.AuthArtifact, config gp.PortalConfig) gp.AuthArtifact {
-	return gp.AuthArtifact{Kind: artifact.Kind, Username: artifact.Username, PortalUserAuthCookie: config.PortalUserAuthCookie}
+	return gp.AuthArtifact{
+		Kind: artifact.Kind, Username: artifact.Username,
+		PortalUserAuthCookie:         config.PortalUserAuthCookie,
+		PortalPrelogonUserAuthCookie: config.PortalPrelogonUserAuthCookie,
+	}
 }

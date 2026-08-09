@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -16,6 +17,8 @@ func Test_Run_servePropagatesBrowserProfileDir_whenPortalProvided(t *testing.T) 
 	portalConfigCalled := make(chan struct{}, 1)
 	gatewayServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/ssl-vpn/prelogin.esp":
+			_, _ = w.Write(gatewaySAMLPreloginResponse())
 		case "/ssl-vpn/login.esp":
 			_, _ = w.Write(gatewayLoginResponse())
 		case "/ssl-vpn/getconfig.esp":
@@ -59,6 +62,9 @@ func Test_Run_servePropagatesBrowserProfileDir_whenPortalProvided(t *testing.T) 
 	}
 	if capturer.request.ProfileDir != profileDir {
 		t.Fatalf("ProfileDir = %q, want %q", capturer.request.ProfileDir, profileDir)
+	}
+	if info, err := os.Stat(profileDir); err != nil || !info.IsDir() {
+		t.Fatalf("persistent profile Stat() = (%v, %v), want preserved directory", info, err)
 	}
 	assertServeStopped(t, errCh)
 }

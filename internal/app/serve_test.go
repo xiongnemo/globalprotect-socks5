@@ -76,13 +76,18 @@ func Test_Run_serveUsesPacketTunnelDialer_whenPortalProvided(t *testing.T) {
 		case "/global-protect/prelogin.esp":
 			_, _ = w.Write([]byte(`<prelogin-response><saml-auth-method>POST</saml-auth-method><saml-request>` + encoded + `</saml-request><saml-default-browser>yes</saml-default-browser></prelogin-response>`))
 		case "/global-protect/getconfig.esp":
-			_, _ = w.Write([]byte(`<policy><portal-userauthcookie>portal-cookie</portal-userauthcookie><gateways><external><list><entry name="http://` + r.Host + `"><description>Gateway</description></entry></list></external></gateways></policy>`))
+			_, _ = w.Write(portalPolicyResponse("http://" + r.Host))
+		case "/ssl-vpn/prelogin.esp":
+			_, _ = w.Write(gatewaySAMLPreloginResponse())
 		case "/ssl-vpn/login.esp":
 			if err := r.ParseForm(); err != nil {
 				t.Fatalf("ParseForm() error = %v", err)
 			}
 			if got := r.Form.Get("portal-userauthcookie"); got != "portal-cookie" {
 				t.Fatalf("portal-userauthcookie = %q, want portal-cookie", got)
+			}
+			if got := r.Form.Get("portal-prelogonuserauthcookie"); got != "portal-prelogon-cookie" {
+				t.Fatalf("portal-prelogonuserauthcookie = %q, want portal-prelogon-cookie", got)
 			}
 			_, _ = w.Write([]byte(`<jnlp><application-desc>` +
 				`<argument></argument>` +

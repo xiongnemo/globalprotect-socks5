@@ -9,8 +9,9 @@ import (
 )
 
 type PortalConfig struct {
-	PortalUserAuthCookie Secret
-	ExternalGateways     []ExternalGateway
+	PortalUserAuthCookie         Secret
+	PortalPrelogonUserAuthCookie Secret
+	ExternalGateways             []ExternalGateway
 }
 
 type ExternalGateway struct {
@@ -19,14 +20,16 @@ type ExternalGateway struct {
 }
 
 type portalConfigXML struct {
-	PortalUserAuthCookie string             `xml:"portal-userauthcookie"`
-	ExternalGateways     []portalGatewayXML `xml:"gateways>external>list>entry"`
-	Policy               portalPolicyXML    `xml:"policy"`
+	PortalUserAuthCookie         string             `xml:"portal-userauthcookie"`
+	PortalPrelogonUserAuthCookie string             `xml:"portal-prelogonuserauthcookie"`
+	ExternalGateways             []portalGatewayXML `xml:"gateways>external>list>entry"`
+	Policy                       portalPolicyXML    `xml:"policy"`
 }
 
 type portalPolicyXML struct {
-	PortalUserAuthCookie string             `xml:"portal-userauthcookie"`
-	ExternalGateways     []portalGatewayXML `xml:"gateways>external>list>entry"`
+	PortalUserAuthCookie         string             `xml:"portal-userauthcookie"`
+	PortalPrelogonUserAuthCookie string             `xml:"portal-prelogonuserauthcookie"`
+	ExternalGateways             []portalGatewayXML `xml:"gateways>external>list>entry"`
 }
 
 type portalGatewayXML struct {
@@ -55,8 +58,7 @@ func (c Client) portalConfigForm(portal PortalURL, artifact AuthArtifact) url.Va
 	form.Set("clientVer", "4100")
 	form.Set("prot", "https:")
 	form.Set("inputStr", "")
-	form.Set("user", artifact.Username)
-	form.Set("passwd", "")
+	setAuthArtifactFields(form, artifact)
 	form.Set("clientgpversion", "4.1.0.98")
 	form.Set("ipv6-support", "no")
 	form.Set("clientos", string(c.profile.ClientOS))
@@ -65,20 +67,29 @@ func (c Client) portalConfigForm(portal PortalURL, artifact AuthArtifact) url.Va
 	form.Set("host", portal.Hostname())
 	form.Set("host-id", c.profile.HostID)
 	form.Set("serialno", c.profile.HostID)
-	form.Set("portal-prelogonuserauthcookie", "empty")
 	form.Set("csc-digest", "")
 	form.Set("config-digest", "")
 	form.Set("csc-support", "no")
 	form.Set("swg-auth-token", "0")
 	form.Set("swg-nonce", "0")
 	form.Set("computer", c.profile.Computer)
-	if artifact.PreloginCookie.String() != "" {
-		form.Set("prelogin-cookie", artifact.PreloginCookie.String())
-	}
-	if artifact.PortalUserAuthCookie.String() != "" {
-		form.Set("portal-userauthcookie", artifact.PortalUserAuthCookie.String())
-	}
 	return form
+}
+
+func setAuthArtifactFields(form url.Values, artifact AuthArtifact) {
+	form.Set("user", artifact.Username)
+	form.Set("passwd", "")
+	form.Set("prelogin-cookie", artifact.PreloginCookie.String())
+	form.Set("token", artifact.Token.String())
+	form.Set("portal-userauthcookie", portalAuthCookieValue(artifact.PortalUserAuthCookie))
+	form.Set("portal-prelogonuserauthcookie", portalAuthCookieValue(artifact.PortalPrelogonUserAuthCookie))
+}
+
+func portalAuthCookieValue(cookie Secret) string {
+	if cookie.String() == "" {
+		return "empty"
+	}
+	return cookie.String()
 }
 
 func ParsePortalConfig(body []byte) (PortalConfig, error) {
@@ -87,21 +98,33 @@ func ParsePortalConfig(body []byte) (PortalConfig, error) {
 		return PortalConfig{}, fmt.Errorf("decode portal config xml: %w", err)
 	}
 	policy := parsed.policy()
-	portalCookie, err := NewSecret(strings.TrimSpace(policy.PortalUserAuthCookie))
+	portalCookie, err := optionalSecret(policy.PortalUserAuthCookie)
 	if err != nil {
 		return PortalConfig{}, fmt.Errorf("portal user auth cookie: %w", err)
 	}
+	prelogonCookie, err := optionalSecret(policy.PortalPrelogonUserAuthCookie)
+	if err != nil {
+		return PortalConfig{}, fmt.Errorf("portal prelogon user auth cookie: %w", err)
+	}
 	return PortalConfig{
-		PortalUserAuthCookie: portalCookie,
-		ExternalGateways:     portalGateways(policy.ExternalGateways),
+		PortalUserAuthCookie:         portalCookie,
+		PortalPrelogonUserAuthCookie: prelogonCookie,
+		ExternalGateways:             portalGateways(policy.ExternalGateways),
 	}, nil
 }
 
 func (p portalConfigXML) policy() portalPolicyXML {
-	if p.PortalUserAuthCookie != "" || len(p.ExternalGateways) > 0 {
-		return portalPolicyXML{PortalUserAuthCookie: p.PortalUserAuthCookie, ExternalGateways: p.ExternalGateways}
+	policy := p.Policy
+	if strings.TrimSpace(p.PortalUserAuthCookie) != "" {
+		policy.PortalUserAuthCookie = p.PortalUserAuthCookie
 	}
-	return p.Policy
+	if strings.TrimSpace(p.PortalPrelogonUserAuthCookie) != "" {
+		policy.PortalPrelogonUserAuthCookie = p.PortalPrelogonUserAuthCookie
+	}
+	if len(p.ExternalGateways) > 0 {
+		policy.ExternalGateways = p.ExternalGateways
+	}
+	return policy
 }
 
 func portalGateways(entries []portalGatewayXML) []ExternalGateway {

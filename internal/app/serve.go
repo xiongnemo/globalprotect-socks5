@@ -39,9 +39,10 @@ type serveTunnelOptions struct {
 }
 
 type serveAuthRequest struct {
-	client  gp.Client
-	portal  gp.PortalURL
-	options serveTunnelOptions
+	client   gp.Client
+	portal   gp.PortalURL
+	options  serveTunnelOptions
+	capturer AuthCapturer
 }
 
 func (r Runner) serve(ctx context.Context, config serveConfig, logger *appLogger) (err error) {
@@ -89,32 +90,21 @@ func (r Runner) serve(ctx context.Context, config serveConfig, logger *appLogger
 }
 
 func (r Runner) newTunnelDialer(ctx context.Context, options serveTunnelOptions, logger *appLogger) (*tunnel.Dialer, error) {
-	portal, err := gp.NewPortalURL(options.portalRaw)
-	if err != nil {
-		return nil, fmt.Errorf("portal: %w", err)
-	}
-	client := gp.NewClient(r.io.HTTPClient, gp.ClientProfile{HostID: options.hostID, Computer: "gp-socks", ClientOS: gp.ClientOSLinux}, options.clientOpts...)
-	artifact, err := r.captureServeArtifact(ctx, serveAuthRequest{client: client, portal: portal, options: options})
+	authenticated, err := r.authenticateGateway(ctx, options, logger)
 	if err != nil {
 		return nil, err
 	}
-	material, err := resolvePortalLogin(ctx, portalLoginRequest{client: client, portal: portal, gatewayRaw: options.gatewayRaw, artifact: artifact})
-	if err != nil {
-		return nil, err
-	}
-	session, err := r.gatewayLoginWithFallback(ctx, gatewayLoginRequest{client: client, gateway: material.gateway, artifact: material.artifact, options: options}, logger)
-	if err != nil {
-		return nil, err
-	}
-	config, err := client.GatewayConfig(ctx, material.gateway, session)
+	config, err := authenticated.client.GatewayConfig(ctx, authenticated.gateway, authenticated.session)
 	if err != nil {
 		return nil, fmt.Errorf("gateway config: %w", err)
 	}
-	localAddr, err := tunnelLocalAddr(config, session)
+	localAddr, err := tunnelLocalAddr(config, authenticated.session)
 	if err != nil {
 		return nil, err
 	}
-	packetTunnel, err := r.packetTunnelConnector().ConnectPacketTunnel(ctx, PacketTunnelRequest{Gateway: material.gateway, Session: session, Config: config})
+	packetTunnel, err := r.packetTunnelConnector().ConnectPacketTunnel(ctx, PacketTunnelRequest{
+		Gateway: authenticated.gateway, Session: authenticated.session, Config: config,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("connect packet tunnel: %w", err)
 	}
@@ -134,7 +124,11 @@ func (r Runner) captureServeArtifact(ctx context.Context, request serveAuthReque
 	if prelogin.AuthMode != gp.AuthModeSAML || prelogin.SAMLRequest.String() == "" {
 		return gp.AuthArtifact{}, fmt.Errorf("serve prelogin requires SAML: %w", gp.ErrInvalidPrelogin)
 	}
-	artifact, err := r.authCapturer().Capture(ctx, browserauth.Request{
+	capturer := request.capturer
+	if capturer == nil {
+		capturer = r.authCapturer()
+	}
+	artifact, err := capturer.Capture(ctx, browserauth.Request{
 		Prelogin:    prelogin,
 		Browser:     request.options.browser,
 		BrowserPath: request.options.browserPath,

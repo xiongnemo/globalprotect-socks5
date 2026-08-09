@@ -61,14 +61,8 @@ func (c Client) gatewayLoginForm(gateway PortalURL, artifact AuthArtifact) url.V
 	form.Set("preferred-ipv6", "")
 	form.Set("inputStr", "")
 	form.Set("computer", c.profile.Computer)
-	form.Set("user", artifact.Username)
-	form.Set("passwd", "")
-	form.Set("portal-prelogonuserauthcookie", "empty")
-	if artifact.PreloginCookie.String() != "" {
-		form.Set("prelogin-cookie", artifact.PreloginCookie.String())
-	}
-	if artifact.PortalUserAuthCookie.String() != "" {
-		form.Set("portal-userauthcookie", artifact.PortalUserAuthCookie.String())
+	setAuthArtifactFields(form, artifact)
+	if artifact.PortalUserAuthCookie.String() != "" || artifact.PortalPrelogonUserAuthCookie.String() != "" {
 		form.Set("host", gateway.Hostname())
 		form.Set("gw", gateway.Hostname())
 		form.Set("gateway-name", gateway.Hostname())

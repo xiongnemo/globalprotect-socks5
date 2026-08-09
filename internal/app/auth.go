@@ -59,12 +59,13 @@ func (r Runner) authCapturer() AuthCapturer {
 }
 
 func (r Runner) writeAuthSummary(artifact gp.AuthArtifact) error {
+	portalCookiePresent := artifact.PortalUserAuthCookie.String() != "" || artifact.PortalPrelogonUserAuthCookie.String() != ""
 	_, err := fmt.Fprintf(r.io.Stdout, "kind=%s username=%s token_present=%t prelogin_cookie_present=%t portal_cookie_present=%t\n",
 		artifact.Kind,
 		artifact.Username,
 		artifact.Token.String() != "",
 		artifact.PreloginCookie.String() != "",
-		artifact.PortalUserAuthCookie.String() != "",
+		portalCookiePresent,
 	)
 	if err != nil {
 		return fmt.Errorf("write auth summary: %w", err)

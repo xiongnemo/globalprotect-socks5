@@ -20,6 +20,8 @@ func Test_Run_serveSelectsExternalGatewayFromPortalConfig_whenGatewayFlagAbsent(
 	gatewayLoginForm := make(chan url.Values, 1)
 	gatewayServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/ssl-vpn/prelogin.esp":
+			_, _ = w.Write(gatewaySAMLPreloginResponse())
 		case "/ssl-vpn/login.esp":
 			gatewayLoginForm <- parsedForm(t, r)
 			_, _ = w.Write(gatewayLoginResponse())
@@ -68,8 +70,11 @@ func Test_Run_serveSelectsExternalGatewayFromPortalConfig_whenGatewayFlagAbsent(
 	if got := form.Get("portal-userauthcookie"); got != "portal-cookie" {
 		t.Fatalf("portal-userauthcookie = %q, want portal-cookie", got)
 	}
-	if form.Has("prelogin-cookie") {
-		t.Fatalf("gateway login form included prelogin-cookie after portal config: %#v", form)
+	if got := form.Get("portal-prelogonuserauthcookie"); got != "portal-prelogon-cookie" {
+		t.Fatalf("portal-prelogonuserauthcookie = %q, want portal-prelogon-cookie", got)
+	}
+	if !form.Has("prelogin-cookie") || form.Get("prelogin-cookie") != "" {
+		t.Fatalf("gateway login prelogin-cookie = %#v, want present and empty", form["prelogin-cookie"])
 	}
 	assertServeStopped(t, errCh)
 	assertDirectDialerIdle(t, directDialer)
@@ -85,6 +90,8 @@ func Test_Run_serveUsesExplicitGatewayAfterPortalConfig_whenGatewayFlagPresent(t
 	gatewayLoginForm := make(chan url.Values, 1)
 	gatewayServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/ssl-vpn/prelogin.esp":
+			_, _ = w.Write(gatewaySAMLPreloginResponse())
 		case "/ssl-vpn/login.esp":
 			gatewayLoginForm <- parsedForm(t, r)
 			_, _ = w.Write(gatewayLoginResponse())
@@ -128,8 +135,11 @@ func Test_Run_serveUsesExplicitGatewayAfterPortalConfig_whenGatewayFlagPresent(t
 	if got := form.Get("portal-userauthcookie"); got != "portal-cookie" {
 		t.Fatalf("portal-userauthcookie = %q, want portal-cookie", got)
 	}
-	if form.Has("prelogin-cookie") {
-		t.Fatalf("gateway login form included prelogin-cookie after portal config: %#v", form)
+	if got := form.Get("portal-prelogonuserauthcookie"); got != "portal-prelogon-cookie" {
+		t.Fatalf("portal-prelogonuserauthcookie = %q, want portal-prelogon-cookie", got)
+	}
+	if !form.Has("prelogin-cookie") || form.Get("prelogin-cookie") != "" {
+		t.Fatalf("gateway login prelogin-cookie = %#v, want present and empty", form["prelogin-cookie"])
 	}
 	assertServeStopped(t, errCh)
 	if !capturer.called {
@@ -192,8 +202,17 @@ func preloginResponse(encoded string) []byte {
 	return []byte(`<prelogin-response><saml-auth-method>POST</saml-auth-method><saml-request>` + encoded + `</saml-request><saml-default-browser>yes</saml-default-browser></prelogin-response>`)
 }
 
+func gatewaySAMLPreloginResponse() []byte {
+	html := `<html><body><form method="POST" action="https://idp.example.test/gateway"></form></body></html>`
+	return preloginResponse(base64.StdEncoding.EncodeToString([]byte(html)))
+}
+
 func portalPolicyResponse(gatewayRaw string) []byte {
-	return []byte(`<policy><portal-userauthcookie>portal-cookie</portal-userauthcookie><gateways><external><list><entry name="` + gatewayRaw + `"><description>Gateway</description></entry></list></external></gateways></policy>`)
+	return []byte(`<policy>` +
+		`<portal-userauthcookie>portal-cookie</portal-userauthcookie>` +
+		`<portal-prelogonuserauthcookie>portal-prelogon-cookie</portal-prelogonuserauthcookie>` +
+		`<gateways><external><list><entry name="` + gatewayRaw + `"><description>Gateway</description></entry></list></external></gateways>` +
+		`</policy>`)
 }
 
 func gatewayLoginResponse() []byte {

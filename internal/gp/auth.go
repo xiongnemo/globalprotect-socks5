@@ -38,7 +38,7 @@ func ParseAuthHeaders(headers map[string]string) (AuthArtifact, error) {
 	for name, value := range headers {
 		key := strings.ToLower(strings.TrimSpace(name))
 		switch key {
-		case "saml-username", "prelogin-cookie", "portal-userauthcookie":
+		case "saml-username", "prelogin-cookie", "portal-userauthcookie", "portal-prelogonuserauthcookie":
 			values.Set(key, strings.TrimSpace(value))
 		}
 	}
@@ -78,33 +78,38 @@ func casArtifact(values url.Values) (AuthArtifact, error) {
 }
 
 func artifactFromValues(values url.Values) (AuthArtifact, error) {
-	username := values.Get("saml-username")
-	prelogin := values.Get("prelogin-cookie")
-	portal := values.Get("portal-userauthcookie")
-	if username == "" || prelogin == "" && portal == "" {
+	artifact := AuthArtifact{Kind: ArtifactSAML, Username: values.Get("saml-username")}
+	var err error
+	artifact.PreloginCookie, err = optionalSecret(values.Get("prelogin-cookie"))
+	if err != nil {
+		return AuthArtifact{}, err
+	}
+	artifact.PortalUserAuthCookie, err = optionalSecret(values.Get("portal-userauthcookie"))
+	if err != nil {
+		return AuthArtifact{}, err
+	}
+	artifact.PortalPrelogonUserAuthCookie, err = optionalSecret(values.Get("portal-prelogonuserauthcookie"))
+	if err != nil {
+		return AuthArtifact{}, err
+	}
+	if artifact.Username == "" || artifact.PreloginCookie.String() == "" &&
+		artifact.PortalUserAuthCookie.String() == "" && artifact.PortalPrelogonUserAuthCookie.String() == "" {
 		return AuthArtifact{}, ErrMissingAuthArtifact
-	}
-	artifact := AuthArtifact{Kind: ArtifactSAML, Username: username}
-	if prelogin != "" {
-		secret, err := NewSecret(prelogin)
-		if err != nil {
-			return AuthArtifact{}, err
-		}
-		artifact.PreloginCookie = secret
-	}
-	if portal != "" {
-		secret, err := NewSecret(portal)
-		if err != nil {
-			return AuthArtifact{}, err
-		}
-		artifact.PortalUserAuthCookie = secret
 	}
 	return artifact, nil
 }
 
+func optionalSecret(raw string) (Secret, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || trimmed == "empty" {
+		return Secret{}, nil
+	}
+	return NewSecret(trimmed)
+}
+
 func artifactFromHTML(html string) (AuthArtifact, error) {
 	values := url.Values{}
-	for _, key := range []string{"saml-username", "prelogin-cookie", "portal-userauthcookie"} {
+	for _, key := range []string{"saml-username", "prelogin-cookie", "portal-userauthcookie", "portal-prelogonuserauthcookie"} {
 		value := tagValue(html, key)
 		if value != "" {
 			values.Set(key, value)
