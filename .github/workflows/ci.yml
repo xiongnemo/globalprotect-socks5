@@ -132,10 +132,129 @@ jobs:
           retention-days: 7
           compression-level: 0
 
+  # The Linux binaries packaged for apt, dnf and apk, from the same static file
+  # the build job produced -- and for https://package.anzupop.com, which indexes
+  # these release assets where they are published. The version is the release
+  # version as it is: v0.0.N is already one number per commit and increasing,
+  # so it needs no prerelease marker the way branch-qualified versions do.
+  package:
+    name: Package (linux/${{ matrix.goarch }})
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {goarch: '386', nfpm_arch: '386'}
+          - {goarch: amd64, nfpm_arch: amd64}
+          - {goarch: arm, nfpm_arch: arm7}
+          - {goarch: arm64, nfpm_arch: arm64}
+          - {goarch: loong64, nfpm_arch: loong64}
+          - {goarch: ppc64le, nfpm_arch: ppc64le}
+          - {goarch: riscv64, nfpm_arch: riscv64}
+          - {goarch: s390x, nfpm_arch: s390x}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      BINARY: gp-socks-${{ needs.version.outputs.version }}-linux-${{ matrix.goarch }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ env.BINARY }}
+          path: bin
+          digest-mismatch: error
+
+      - name: Build packages
+        shell: bash
+        env:
+          NFPM_ARCH: ${{ matrix.nfpm_arch }}
+          NFPM_RELEASE: v2.48.0
+        run: |
+          set -euo pipefail
+          go install "github.com/goreleaser/nfpm/v2/cmd/nfpm@${NFPM_RELEASE}"
+          chmod 0755 "bin/${BINARY}"
+          mkdir -p dist
+          sed -e "s|@NFPM_ARCH@|${NFPM_ARCH}|g" \
+              -e "s|@NFPM_VERSION@|${VERSION#v}|g" \
+              -e "s|@NFPM_BINARY@|${PWD}/bin/${BINARY}|g" \
+              -e "s|@NFPM_DOCS@|${PWD}|g" \
+              packaging/nfpm.yaml > nfpm.yaml
+          for format in deb rpm apk; do
+            nfpm package --config nfpm.yaml --packager "$format" --target "dist/${BINARY}.${format}"
+          done
+          ls -l dist
+
+      - name: Upload packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gp-socks-packages-linux-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  # Installs each package where it is meant to go and starts the binary. The
+  # apk carries the static binary onto musl, and apk-tools 2 (Alpine 3.21) and
+  # 3 (3.24) parse package versions differently, so both are checked.
+  package-smoke:
+    name: Smoke ${{ matrix.format }} on ${{ matrix.image }} (${{ matrix.goarch }})
+    needs: package
+    runs-on: ${{ matrix.goarch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {format: deb, image: 'debian:stable', goarch: amd64}
+          - {format: deb, image: 'debian:stable', goarch: arm64}
+          - {format: deb, image: 'ubuntu:24.04', goarch: amd64}
+          - {format: rpm, image: 'fedora:latest', goarch: amd64}
+          - {format: rpm, image: 'rockylinux:9', goarch: amd64}
+          - {format: apk, image: 'alpine:3.21', goarch: amd64}
+          - {format: apk, image: 'alpine:3.24', goarch: amd64}
+          - {format: apk, image: 'alpine:3.24', goarch: arm64}
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: gp-socks-packages-linux-${{ matrix.goarch }}
+          path: dist
+
+      - name: Install and start
+        shell: bash
+        env:
+          FORMAT: ${{ matrix.format }}
+        run: |
+          set -euo pipefail
+          docker run --rm -e FORMAT -v "$PWD/dist:/dist:ro" "${{ matrix.image }}" sh -euc '
+            case "$FORMAT" in
+              deb) apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq /dist/*.deb ;;
+              rpm) dnf install -y -q /dist/*.rpm ;;
+              apk)
+                apk add --no-cache --allow-untrusted /dist/*.apk
+                version=$(awk "/^P:gp-socks\$/ { found = 1 } found && /^V:/ { print substr(\$0, 3); exit }" /lib/apk/db/installed)
+                invalid=$(apk version -c "$version")
+                [ -z "$invalid" ] || { echo "apk calls $version invalid"; exit 1; }
+                ;;
+            esac
+            test -s /usr/share/doc/gp-socks/config.yaml.template
+            usage=$(gp-socks --help 2>&1 || true)
+            echo "$usage" | head -3
+            case "$usage" in *"Usage of gp-socks"*) ;; *) echo "gp-socks did not start"; exit 1 ;; esac
+          '
+
   release:
     name: Publish prerelease
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
-    needs: [verify, version, build]
+    needs: [verify, version, build, package-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -182,6 +301,11 @@ jobs:
           gp-socks-${VERSION}-windows-arm64.exe
           EOF
           )
+          for arch in 386 amd64 arm arm64 loong64 ppc64le riscv64 s390x; do
+            for format in deb rpm apk; do
+              expected+=$'\n'"gp-socks-${VERSION}-linux-${arch}.${format}"
+            done
+          done
           actual=$(find dist -maxdepth 1 -type f -printf '%f\n' | sort)
           if [[ "$actual" != "$(printf '%s\n' "$expected" | sort)" ]]; then
             diff -u <(printf '%s\n' "$expected" | sort) <(printf '%s\n' "$actual")
