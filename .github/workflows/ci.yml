@@ -180,7 +180,9 @@ jobs:
           NFPM_RELEASE: v2.48.0
         run: |
           set -euo pipefail
-          go install "github.com/goreleaser/nfpm/v2/cmd/nfpm@${NFPM_RELEASE}"
+          # nFPM needs a newer Go than this module pins; the pin governs what
+          # builds gp-socks, so only this install may fetch another toolchain.
+          GOTOOLCHAIN=auto go install "github.com/goreleaser/nfpm/v2/cmd/nfpm@${NFPM_RELEASE}"
           chmod 0755 "bin/${BINARY}"
           mkdir -p dist
           sed -e "s|@NFPM_ARCH@|${NFPM_ARCH}|g" \
