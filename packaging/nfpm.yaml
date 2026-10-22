@@ -21,6 +21,8 @@ contents:
     file_info:
       mode: 0755
   - src: "@NFPM_DOCS@/config.yaml.template"
-    dst: /usr/share/doc/gp-socks/config.yaml.template
+    # Not under /usr/share/doc: minimal images (Ubuntu's docker image among them)
+    # exclude that tree from installs, and this file is needed, not reading.
+    dst: /usr/share/gp-socks/config.yaml.template
   - src: "@NFPM_DOCS@/README.md"
     dst: /usr/share/doc/gp-socks/README.md

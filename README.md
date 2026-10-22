@@ -223,7 +223,7 @@ Verify a downloaded binary before running it:
 sha256sum -c SHA256SUMS --ignore-missing
 ```
 
-The Linux binaries for `386`, `amd64`, `arm` (v7), `arm64`, `loong64`, `ppc64le`, `riscv64` and `s390x` are also packaged as `.deb`, `.rpm` and `.apk`, which install `gp-socks` to `/usr/bin` and `config.yaml.template` to `/usr/share/doc/gp-socks/`. They are installed and started on Debian, Ubuntu, Fedora, Rocky Linux and Alpine before a prerelease is published, and can be installed from [package.anzupop.com](https://package.anzupop.com):
+The Linux binaries for `386`, `amd64`, `arm` (v7), `arm64`, `loong64`, `ppc64le`, `riscv64` and `s390x` are also packaged as `.deb`, `.rpm` and `.apk`, which install `gp-socks` to `/usr/bin` and `config.yaml.template` to `/usr/share/gp-socks/`. They are installed and started on Debian, Ubuntu, Fedora, Rocky Linux and Alpine before a prerelease is published, and can be installed from [package.anzupop.com](https://package.anzupop.com):
 
 ```bash
 sudo curl -fsSLo /usr/share/keyrings/nemo.gpg https://package.anzupop.com/keys/nemo-packages.gpg

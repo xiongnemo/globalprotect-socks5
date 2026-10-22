@@ -247,7 +247,7 @@ jobs:
                 [ -z "$invalid" ] || { echo "apk calls $version invalid"; exit 1; }
                 ;;
             esac
-            test -s /usr/share/doc/gp-socks/config.yaml.template
+            test -s /usr/share/gp-socks/config.yaml.template
             usage=$(gp-socks --help 2>&1 || true)
             echo "$usage" | head -3
             case "$usage" in *"Usage of gp-socks"*) ;; *) echo "gp-socks did not start"; exit 1 ;; esac
