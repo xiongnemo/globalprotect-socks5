@@ -18,10 +18,10 @@ It does not read browser cookie databases, bypass MFA, call an external `opencon
 The command grammar is:
 
 ```text
-gp-socks [--config FILE | --no-config] [--log-level LEVEL] <auth|parse-auth|probe|serve> [options]
+gp-socks [--config FILE | --no-config] [--log-level LEVEL] <auth|parse-auth|probe|serve|migrate> [options]
 ```
 
-`--config`, `--no-config`, and `--log-level` are root flags and must precede the command. Command-specific flags follow the command. `--config` and `--no-config` are mutually exclusive.
+`--config`, `--no-config`, and `--log-level` are root flags and must precede the command. Command-specific flags follow the command. `--config` and `--no-config` are mutually exclusive. `migrate` moves an old `./config.yaml` to its new location; see [Files](#files).
 
 ```bash
 go test ./...
@@ -32,24 +32,28 @@ go build -o bin/gp-socks ./cmd/gp-socks
 ./bin/gp-socks parse-auth 'globalprotectcallback:...'
 ./bin/gp-socks serve --listen 127.0.0.1:1080
 ./bin/gp-socks serve --listen 127.0.0.1:1080 --portal https://vpn.monashuniversity.cn --host-id test-host --browser auto
-./bin/gp-socks serve --listen 127.0.0.1:1080 --portal https://vpn.monashuniversity.cn --host-id test-host --browser auto --browser-profile-dir .gp-browser-profile
-./bin/gp-socks serve --listen 127.0.0.1:1080 --portal https://vpn.monashuniversity.cn --host-id test-host --browser auto --debug-log gp-debug.jsonl
+./bin/gp-socks serve --listen 127.0.0.1:1080 --portal https://vpn.monashuniversity.cn --host-id test-host --browser auto --browser-profile-dir ~/.local/share/gp-socks/browser-profile
+mkdir -p ~/.local/state/gp-socks
+./bin/gp-socks serve --listen 127.0.0.1:1080 --portal https://vpn.monashuniversity.cn --host-id test-host --browser auto --debug-log ~/.local/state/gp-socks/debug.jsonl
 ./bin/gp-socks serve --listen 127.0.0.1:1080 --socks-username proxy-user --socks-password 'replace-with-a-strong-password'
 ./bin/gp-socks serve --portal https://vpn.example.edu --dns-mode vpn --dns-servers 10.0.0.53,10.0.0.54
 ```
 
-Linux and macOS shell:
+Linux and macOS shell (the packages install the template as `/usr/share/gp-socks/config.yaml.template`):
 
 ```bash
-cp config.yaml.template config.yaml
+mkdir -p -m 700 ~/.config/gp-socks
+cp config.yaml.template ~/.config/gp-socks/config.yaml
+chmod 600 ~/.config/gp-socks/config.yaml
 ./bin/gp-socks --log-level info serve
 ./bin/gp-socks --config ./another.yaml serve
 ```
 
-Windows PowerShell:
+Windows PowerShell (the file is `%USERPROFILE%\.config\gp-socks\config.yaml`):
 
 ```powershell
-Copy-Item .\config.yaml.template .\config.yaml
+New-Item -ItemType Directory -Force "$HOME\.config\gp-socks" | Out-Null
+Copy-Item .\config.yaml.template "$HOME\.config\gp-socks\config.yaml"
 .\bin\gp-socks.exe --log-level info serve
 .\bin\gp-socks.exe --config .\another.yaml serve
 ```
@@ -114,9 +118,9 @@ Use `https://` portal and gateway URLs. `http://` is accepted only for local tes
 
 ## Configuration
 
-The production CLI automatically looks for exactly `./config.yaml` in the process working directory. A missing automatic file is ignored; an existing file that cannot be read or parsed fails the command. `--config FILE` selects only that explicit YAML file and suppresses automatic discovery. `--no-config` disables the file layer entirely, which is useful for automation running in an untrusted working directory. `GP_SOCKS_CONFIG` is not supported.
+The production CLI automatically looks for exactly `$XDG_CONFIG_HOME/gp-socks/config.yaml` (by default `~/.config/gp-socks/config.yaml`), and, if that does not exist, for `./config.yaml` in the process working directory, where v0.0.3 to v0.0.9 looked; see [Files](#files). A missing automatic file is ignored; an existing file that cannot be read or parsed fails the command. `--config FILE` selects only that explicit YAML file and suppresses automatic discovery. `--no-config` disables the file layer entirely, which is useful for automation running in an untrusted working directory. `GP_SOCKS_CONFIG` is not supported.
 
-The repository and release include `config.yaml.template`. Copy it to `config.yaml` before editing it; the template itself is never loaded automatically. Root `log_level` and the `probe`, `auth`, and `serve` sections are optional. Only the section for the selected command is applied; `parse-auth` has no command section.
+The repository and release include `config.yaml.template`. Copy it to `~/.config/gp-socks/config.yaml` before editing it; the template itself is never loaded automatically. Root `log_level` and the `probe`, `auth`, and `serve` sections are optional. Only the section for the selected command is applied; `parse-auth` has no command section.
 
 A complete file that spells out every supported field is:
 
@@ -197,11 +201,37 @@ The defaults are:
 | `auth` | `portal`: `""`; `host_id`: `gp-socks`; `browser`: `auto`; `browser_path`, `browser_profile_dir`, `debug_log`: `""`; `timeout`: `5m` |
 | `serve` | `listen`: `127.0.0.1:1080`; `socks_username`, `socks_password`: `""`; `handshake_timeout`: `10s`; `connect_timeout`: `30s`; `max_connections`: `256`; `portal`, `gateway`, `dns_servers`: `""`; `dns_mode`: `vpn`; `host_id`: `gp-socks`; `browser`: `auto`; `browser_path`, `browser_profile_dir`, `debug_log`: `""`; `timeout`: `5m` |
 
-The automatic `config.yaml`, relative `--config` paths, and all other explicit relative paths are resolved from the process working directory, not from the config file's directory.
+Relative `--config` paths and all other explicit relative paths, including those inside the configuration file, are resolved from the process working directory, not from the config file's directory. Use absolute paths in `~/.config/gp-socks/config.yaml` so they do not depend on where `gp-socks` is started.
 
 The final resolved `serve.listen` must not be blank or whitespace-only. SOCKS credentials, durations, the connection limit, DNS mode, and custom DNS servers are also validated before any debug-log file, browser, authentication, tunnel, or listener activity. `--allow-non-loopback` is intentionally CLI-only and is not persisted in YAML or accepted through an environment variable.
 
-When used as a library, `app.NewRunner` is environment- and filesystem-neutral: it does not read the process environment unless `app.IO.LookupEnv` is supplied, and it does not discover `config.yaml` unless `app.IO.AutoConfig` is true. The production CLI explicitly enables both behaviors; embedders can opt into either independently.
+When used as a library, `app.NewRunner` is environment- and filesystem-neutral: it does not read the process environment unless `app.IO.LookupEnv` is supplied, and it does not discover `config.yaml` unless `app.IO.AutoConfig` is true. Automatic discovery reads `XDG_CONFIG_HOME` through `LookupEnv` and locates `~` through `app.IO.HomeDir`; without either, it finds only `./config.yaml`, as before. The production CLI explicitly enables all of these (`HomeDir: os.UserHomeDir`); embedders can opt into each independently.
+
+## Files
+
+`gp-socks` keeps one per-user file, its configuration, in the XDG Base Directory layout, the same on Linux, macOS and Windows:
+
+| Item | Location | Kind | Older versions |
+| --- | --- | --- | --- |
+| `config.yaml` | `$XDG_CONFIG_HOME/gp-socks/config.yaml`, default `~/.config/gp-socks/config.yaml` | config | `./config.yaml` in the working directory (v0.0.3 to v0.0.9) |
+
+- `~` is the home directory: `$HOME` on Linux and macOS, `%USERPROFILE%` on Windows. `%APPDATA%`, `%LOCALAPPDATA%` and `~/Library` are not used.
+- `XDG_CONFIG_HOME` is honored only when it is an absolute path; unset or relative, `~/.config` is used.
+- `--config FILE` and `--no-config` still take precedence over automatic discovery.
+- **Fallback:** when the new file does not exist and `./config.yaml` does, that file is used and one line on stderr says so: `gp-socks: using the configuration from the old location …; run "gp-socks migrate" to move it to …`. It never goes to stdout or into the JSON application log.
+- Nothing is created on read; `~/.config/gp-socks` is created by `migrate` (mode 0700, the file 0600) or by you.
+
+Nothing else is stored by default. The browser profile is a temporary directory deleted when authentication finishes. A persistent `--browser-profile-dir`, a `--debug-log` and a probe `--sso-file` are written only where you point them. Suggested places are `~/.local/share/gp-socks/browser-profile` for the profile (data: it holds IdP session cookies; gp-socks creates it with mode 0700) and `~/.local/state/gp-socks/` for debug logs (state; create the directory first).
+
+### Migrating
+
+```bash
+gp-socks migrate --dry-run            # print the plan, change nothing
+gp-socks migrate                      # move ./config.yaml from the current directory
+gp-socks migrate --from ~/vpn/config.yaml
+```
+
+Without `--from`, `migrate` looks in the current directory and says so. It never overwrites: if the new location already holds an identical file, the old copy is removed; if it holds a different one, both are kept, the conflict is reported and `migrate` exits non-zero. Relative paths in the file (`sso_file`, `debug_log`, `browser_path`, `browser_profile_dir`) were resolved from the directory `gp-socks` ran in, so they are rewritten as absolute paths under the file's old directory; the files they name stay where they are. A rename that fails across volumes becomes a copy verified by size and SHA-256 before the original is removed. A second run finds nothing to do. `migrate` cannot tell whether `gp-socks` is running; stop it first.
 
 ## Application logging
 
@@ -223,7 +253,7 @@ Verify a downloaded binary before running it:
 sha256sum -c SHA256SUMS --ignore-missing
 ```
 
-The Linux binaries for `386`, `amd64`, `arm` (v7), `arm64`, `loong64`, `ppc64le`, `riscv64` and `s390x` are also packaged as `.deb`, `.rpm` and `.apk`, which install `gp-socks` to `/usr/bin` and `config.yaml.template` to `/usr/share/gp-socks/`. They are installed and started on Debian, Ubuntu, Fedora, Rocky Linux and Alpine before a prerelease is published, and can be installed from [package.anzupop.com](https://package.anzupop.com):
+The Linux binaries for `386`, `amd64`, `arm` (v7), `arm64`, `loong64`, `ppc64le`, `riscv64` and `s390x` are also packaged as `.deb`, `.rpm` and `.apk`, which install `gp-socks` to `/usr/bin` and `config.yaml.template` to `/usr/share/gp-socks/` (copy it to `~/.config/gp-socks/config.yaml` to use it). They are installed and started on Debian, Ubuntu, Fedora, Rocky Linux and Alpine before a prerelease is published, and can be installed from [package.anzupop.com](https://package.anzupop.com):
 
 ```bash
 sudo curl -fsSLo /usr/share/keyrings/nemo.gpg https://package.anzupop.com/keys/nemo-packages.gpg
