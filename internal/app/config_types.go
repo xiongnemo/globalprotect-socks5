@@ -7,6 +7,7 @@ const (
 	commandParseAuth commandName = "parse-auth"
 	commandProbe     commandName = "probe"
 	commandServe     commandName = "serve"
+	commandMigrate   commandName = "migrate"
 )
 
 type lookupEnvFunc func(string) (string, bool)
@@ -73,6 +74,7 @@ type cliInvocation struct {
 	probe            probePatch
 	auth             authPatch
 	serve            servePatch
+	migrate          migrateOptions
 }
 
 type rawInvocation struct {

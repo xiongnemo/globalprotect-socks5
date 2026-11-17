@@ -67,6 +67,7 @@ func TestMain_injectsProcessEnvironmentAndLogWriter(t *testing.T) {
 	}
 	mainBody := findFunctionBody(t, file, "main")
 	foundEnvironment := false
+	foundHomeDir := false
 	foundLogWriter := false
 	foundAutoConfig := false
 
@@ -88,6 +89,9 @@ func TestMain_injectsProcessEnvironmentAndLogWriter(t *testing.T) {
 			if key.Name == "LookupEnv" && isSelector(field.Value, "os", "LookupEnv") {
 				foundEnvironment = true
 			}
+			if key.Name == "HomeDir" && isSelector(field.Value, "os", "UserHomeDir") {
+				foundHomeDir = true
+			}
 			if key.Name == "LogWriter" && isSelector(field.Value, "os", "Stderr") {
 				foundLogWriter = true
 			}
@@ -102,6 +106,9 @@ func TestMain_injectsProcessEnvironmentAndLogWriter(t *testing.T) {
 	// Then
 	if !foundEnvironment {
 		t.Error("main does not inject os.LookupEnv")
+	}
+	if !foundHomeDir {
+		t.Error("main does not inject os.UserHomeDir as HomeDir")
 	}
 	if !foundLogWriter {
 		t.Error("main does not inject os.Stderr as LogWriter")

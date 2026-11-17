@@ -1,0 +1,172 @@
+package userdirs
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// testEnv points every variable that could reach a real home at temporary
+// directories, then returns an injected environment rooted in a fresh home
+// and working directory. vars are the variables it sees.
+func testEnv(t *testing.T, vars map[string]string) (env Env, home, wd string) {
+	t.Helper()
+	for _, name := range []string{"HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR"} {
+		t.Setenv(name, t.TempDir())
+	}
+	home, wd = t.TempDir(), t.TempDir()
+	env = Env{
+		LookupEnv: func(name string) (string, bool) { value, ok := vars[name]; return value, ok },
+		HomeDir:   func() (string, error) { return home, nil },
+		WorkDir:   func() (string, error) { return wd, nil },
+	}
+	return env, home, wd
+}
+
+func writeFile(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConfigHomeHonorsOnlyAbsoluteXDG(t *testing.T) {
+	absolute := t.TempDir()
+	for _, test := range []struct {
+		name, xdg string
+		want      func(home string) string
+	}{
+		{"unset", "", func(home string) string { return filepath.Join(home, ".config") }},
+		{"absolute", absolute, func(string) string { return absolute }},
+		{"relative", filepath.Join("relative", "config"), func(home string) string { return filepath.Join(home, ".config") }},
+		{"dot", ".", func(home string) string { return filepath.Join(home, ".config") }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			env, home, _ := testEnv(t, map[string]string{"XDG_CONFIG_HOME": test.xdg})
+			got, err := env.ConfigHome()
+			if err != nil || got != test.want(home) {
+				t.Fatalf("ConfigHome() = %s, %v; want %s", got, err, test.want(home))
+			}
+			file, err := env.ConfigFile()
+			if err != nil || file != filepath.Join(test.want(home), "gp-socks", "config.yaml") {
+				t.Fatalf("ConfigFile() = %s, %v", file, err)
+			}
+		})
+	}
+}
+
+func TestConfigHomeWithoutHome(t *testing.T) {
+	env, _, _ := testEnv(t, nil)
+	env.HomeDir = nil
+	if _, err := env.ConfigHome(); !errors.Is(err, ErrNoHome) {
+		t.Fatalf("ConfigHome() error = %v, want ErrNoHome", err)
+	}
+	env.HomeDir = func() (string, error) { return "", errors.New("$HOME is not defined") }
+	if _, err := env.ConfigHome(); !errors.Is(err, ErrNoHome) {
+		t.Fatalf("ConfigHome() error = %v, want ErrNoHome", err)
+	}
+	// An absolute XDG_CONFIG_HOME needs no home.
+	xdg := t.TempDir()
+	env.LookupEnv = func(name string) (string, bool) { return xdg, name == "XDG_CONFIG_HOME" }
+	if got, err := env.ConfigHome(); err != nil || got != xdg {
+		t.Fatalf("ConfigHome() = %s, %v", got, err)
+	}
+	// Nor does a nil LookupEnv see any variable.
+	env.LookupEnv = nil
+	if _, err := env.ConfigHome(); !errors.Is(err, ErrNoHome) {
+		t.Fatalf("ConfigHome() error = %v, want ErrNoHome", err)
+	}
+}
+
+func TestResolveConfig(t *testing.T) {
+	for _, setting := range []string{"XDG unset", "XDG absolute", "XDG relative"} {
+		for _, test := range []struct {
+			name              string
+			atNew, atLegacy   bool
+			wantNew, wantWarn bool
+		}{
+			{"neither", false, false, true, false},
+			{"new only", true, false, true, false},
+			{"legacy only", false, true, false, true},
+			{"both", true, true, true, false},
+		} {
+			t.Run(setting+"/"+test.name, func(t *testing.T) {
+				vars, base := map[string]string{}, ""
+				switch setting {
+				case "XDG absolute":
+					base = t.TempDir()
+					vars["XDG_CONFIG_HOME"] = base
+				case "XDG relative":
+					vars["XDG_CONFIG_HOME"] = "rel"
+				}
+				env, home, wd := testEnv(t, vars)
+				if base == "" {
+					base = filepath.Join(home, ".config")
+				}
+				newPath := filepath.Join(base, "gp-socks", "config.yaml")
+				legacy := filepath.Join(wd, "config.yaml")
+				if test.atNew {
+					writeFile(t, newPath, "new")
+				}
+				if test.atLegacy {
+					writeFile(t, legacy, "legacy")
+				}
+				got, err := env.ResolveConfig()
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := legacy
+				if test.wantNew {
+					want = newPath
+				}
+				if got.Path != want || got.Legacy != test.wantWarn || got.New != newPath {
+					t.Fatalf("ResolveConfig() = %+v, want path %s legacy %t", got, want, test.wantWarn)
+				}
+				if !test.atNew {
+					if _, err := os.Stat(filepath.Dir(newPath)); !os.IsNotExist(err) {
+						t.Fatal("resolving created the new directory; it must wait for the first write")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestResolveConfigWithoutHome(t *testing.T) {
+	env, _, wd := testEnv(t, nil)
+	env.HomeDir = nil
+	got, err := env.ResolveConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != filepath.Join(wd, "config.yaml") || got.Legacy || got.New != "" {
+		t.Fatalf("ResolveConfig() = %+v, want ./config.yaml as before, without a notice", got)
+	}
+}
+
+func TestResolveConfigIgnoresEmptyNewDirectory(t *testing.T) {
+	env, home, wd := testEnv(t, nil)
+	if err := os.MkdirAll(filepath.Join(home, ".config", "gp-socks"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(wd, "config.yaml"), "legacy")
+	got, err := env.ResolveConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Legacy || got.Path != filepath.Join(wd, "config.yaml") {
+		t.Fatalf("an empty new directory hid the legacy configuration: %+v", got)
+	}
+}
+
+func TestLegacyNotice(t *testing.T) {
+	c := ConfigChoice{Path: filepath.FromSlash("/work/config.yaml"), Legacy: true, New: filepath.FromSlash("/home/u/.config/gp-socks/config.yaml")}
+	want := `gp-socks: using the configuration from the old location ` + c.Path + `; run "gp-socks migrate" to move it to ` + c.New
+	if got := c.LegacyNotice(); got != want {
+		t.Fatalf("LegacyNotice() = %q, want %q", got, want)
+	}
+}

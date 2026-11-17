@@ -27,7 +27,7 @@ func Test_Run_printsRootFlagsInUsage_whenInvocationMissing(t *testing.T) {
 	if !errors.Is(err, app.ErrUsage) {
 		t.Fatalf("Run() error = %v, want ErrUsage", err)
 	}
-	want := "usage: gp-socks [--config FILE | --no-config] [--log-level LEVEL] <auth|parse-auth|probe|serve> [options]\n"
+	want := "usage: gp-socks [--config FILE | --no-config] [--log-level LEVEL] <auth|parse-auth|probe|serve|migrate> [options]\n"
 	if stderr.String() != want {
 		t.Fatalf("stderr = %q, want %q", stderr.String(), want)
 	}

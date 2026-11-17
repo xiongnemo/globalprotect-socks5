@@ -1,9 +1,19 @@
 package app
 
+import (
+	"fmt"
+
+	"github.com/xiongnemo/globalprotect-socks5/internal/userdirs"
+)
+
 func (r Runner) prepareInvocation(cli cliInvocation) (preparedInvocation, error) {
-	selection, err := selectConfig(cli.configPath, cli.noConfig, r.io.AutoConfig)
+	selection, err := selectConfig(cli.configPath, cli.noConfig, r.io.AutoConfig, r.userDirs())
 	if err != nil {
 		return preparedInvocation{}, err
+	}
+	if selection.legacyNotice != "" {
+		// User-facing stderr, once per run; never stdout or the JSON log.
+		fmt.Fprintln(r.io.Stderr, selection.legacyNotice)
 	}
 
 	var file fileConfig
@@ -41,4 +51,10 @@ func (r Runner) prepareInvocation(cli cliInvocation) (preparedInvocation, error)
 		return preparedInvocation{}, err
 	}
 	return prepared, nil
+}
+
+// userDirs is the XDG resolver over the injected environment: no variables
+// without LookupEnv, no home without HomeDir.
+func (r Runner) userDirs() userdirs.Env {
+	return userdirs.Env{LookupEnv: r.io.LookupEnv, HomeDir: r.io.HomeDir}
 }

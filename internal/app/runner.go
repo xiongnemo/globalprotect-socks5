@@ -22,6 +22,7 @@ type IO struct {
 	Stderr                io.Writer
 	LogWriter             io.Writer
 	LookupEnv             func(string) (string, bool)
+	HomeDir               func() (string, error)
 	AutoConfig            bool
 	HTTPClient            *http.Client
 	AuthCapturer          AuthCapturer
@@ -65,6 +66,9 @@ func (r Runner) Run(ctx context.Context, args []string) error {
 			r.logFailure(fail(cli.command, failureStageArguments, failureCodeInvalidArguments, err))
 		}
 		return err
+	}
+	if cli.command == commandMigrate {
+		return r.runMigrate(cli)
 	}
 
 	prepared, err := r.prepareInvocation(cli)
@@ -118,7 +122,7 @@ func (r Runner) parseAuth(args []string) error {
 }
 
 func (r Runner) usage() error {
-	_, err := fmt.Fprintln(r.io.Stderr, "usage: gp-socks [--config FILE | --no-config] [--log-level LEVEL] <auth|parse-auth|probe|serve> [options]")
+	_, err := fmt.Fprintln(r.io.Stderr, "usage: gp-socks [--config FILE | --no-config] [--log-level LEVEL] <auth|parse-auth|probe|serve|migrate> [options]")
 	if err != nil {
 		return fmt.Errorf("write usage: %w", err)
 	}

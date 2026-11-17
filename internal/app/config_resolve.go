@@ -4,15 +4,18 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/xiongnemo/globalprotect-socks5/internal/userdirs"
 )
 
 var errBlankServePortalOverride = errors.New("blank serve portal override would clear a lower-precedence portal")
 
-const defaultConfigPath = "config.yaml"
-
 type configSelection struct {
 	path         string
 	allowMissing bool
+	// legacyNotice is the line to print on stderr when automatic discovery
+	// falls back to ./config.yaml from older versions.
+	legacyNotice string
 }
 
 func resolveRawInvocation(cli cliInvocation, file fileConfig, lookupEnv lookupEnvFunc) (rawInvocation, error) {
@@ -48,7 +51,10 @@ func resolveRawInvocation(cli cliInvocation, file fileConfig, lookupEnv lookupEn
 	return resolved, nil
 }
 
-func selectConfig(cliPath optionalString, noConfig, autoConfig bool) (configSelection, error) {
+// selectConfig picks the configuration file. Automatic discovery takes
+// $XDG_CONFIG_HOME/gp-socks/config.yaml, else ./config.yaml where older
+// versions looked, and is optional either way.
+func selectConfig(cliPath optionalString, noConfig, autoConfig bool, dirs userdirs.Env) (configSelection, error) {
 	if cliPath.present && noConfig {
 		return configSelection{}, fmt.Errorf("--config and --no-config are mutually exclusive")
 	}
@@ -62,7 +68,15 @@ func selectConfig(cliPath optionalString, noConfig, autoConfig bool) (configSele
 		return configSelection{path: cliPath.value}, nil
 	}
 	if autoConfig {
-		return configSelection{path: defaultConfigPath, allowMissing: true}, nil
+		choice, err := dirs.ResolveConfig()
+		if err != nil {
+			return configSelection{}, fmt.Errorf("locate config: %w", err)
+		}
+		selection := configSelection{path: choice.Path, allowMissing: true}
+		if choice.Legacy {
+			selection.legacyNotice = choice.LegacyNotice()
+		}
+		return selection, nil
 	}
 	return configSelection{}, nil
 }

@@ -12,7 +12,7 @@ import (
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	code := run(ctx, os.Args[1:], app.IO{LookupEnv: os.LookupEnv, LogWriter: os.Stderr, AutoConfig: true})
+	code := run(ctx, os.Args[1:], app.IO{LookupEnv: os.LookupEnv, HomeDir: os.UserHomeDir, LogWriter: os.Stderr, AutoConfig: true})
 	stop()
 	os.Exit(code)
 }

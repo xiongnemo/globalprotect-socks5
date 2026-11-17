@@ -10,7 +10,7 @@ import (
 func parseCLIInvocation(args []string, stderr io.Writer) (cliInvocation, error) {
 	flags := flag.NewFlagSet("gp-socks", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	flags.String("config", "", "YAML configuration file; overrides automatic config.yaml discovery")
+	flags.String("config", "", "YAML configuration file; overrides automatic discovery of $XDG_CONFIG_HOME/gp-socks/config.yaml, then ./config.yaml")
 	flags.Bool("no-config", false, "disable automatic and explicit configuration files")
 	flags.String("log-level", "", "application log level: error, warn, info, or debug")
 	if err := flags.Parse(args); err != nil {
@@ -46,6 +46,8 @@ func parseCLIInvocation(args []string, stderr io.Writer) (cliInvocation, error) 
 		invocation.serve, invocation.allowNonLoopback, err = parseServeFlags(commandArgs, stderr)
 	case commandParseAuth:
 		invocation.arguments = append([]string(nil), commandArgs...)
+	case commandMigrate:
+		invocation.migrate, err = parseMigrateFlags(commandArgs, stderr)
 	default:
 		return invocation, ErrUsage
 	}
