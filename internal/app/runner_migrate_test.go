@@ -18,7 +18,13 @@ func xdgRunner(t *testing.T) (runner app.Runner, stdout, stderr *bytes.Buffer, h
 	for _, name := range []string{"HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR"} {
 		t.Setenv(name, t.TempDir())
 	}
-	wd = enterWorkingDirectory(t)
+	enterWorkingDirectory(t)
+	// The runner sees the working directory as the process does: on macOS the
+	// temporary directory is reached through a symlink (/var -> /private/var).
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
 	home = t.TempDir()
 	stdout, stderr = &bytes.Buffer{}, &bytes.Buffer{}
 	runner = app.NewRunner(app.IO{
