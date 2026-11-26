@@ -116,6 +116,43 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # The exe's file properties: an RT_VERSION resource and nothing else, as
+      # a manifest would change how Windows runs it (DPI, OS version, code
+      # page). go build links the rsrc_windows_<arch>.syso beside package main
+      # into Windows builds only. The release job publishes every version as a
+      # prerelease, so every build is flagged as one; if a stable line is ever
+      # added, FLAGS has to follow its condition.
+      - name: Generate Windows version resource
+        if: matrix.goos == 'windows'
+        shell: bash
+        env:
+          FLAGS: Prerelease
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          jq -n --arg numeric "${VERSION#v}.0" --arg version "$VERSION" --arg flags "$FLAGS" '{
+            RT_VERSION: {"#1": {"0000": {
+              fixed: {file_version: $numeric, product_version: $numeric, flags: $flags},
+              info: {"0409": {
+                CompanyName: "Nemo Xiong",
+                FileDescription: "GlobalProtect VPN as a local SOCKS5 proxy, with SSO.",
+                FileVersion: $version,
+                InternalName: "gp-socks",
+                LegalCopyright: "Copyright © 2026 Nemo Xiong",
+                OriginalFilename: "gp-socks.exe",
+                ProductName: "gp-socks",
+                ProductVersion: $version
+              }}
+            }}}
+          }' > cmd/gp-socks/winres.json
+          cat cmd/gp-socks/winres.json
+          # go-winres runs here on the runner, not on the build's target.
+          env -u GOOS -u GOARCH -u GOARM go run github.com/tc-hib/go-winres@v0.3.3 make \
+            --in cmd/gp-socks/winres.json \
+            --out cmd/gp-socks/rsrc \
+            --arch 386,amd64,arm64
+          ls -l cmd/gp-socks/rsrc_windows_*.syso
+
       - name: Build binary
         shell: bash
         run: |

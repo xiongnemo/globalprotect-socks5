@@ -20,3 +20,5 @@ gp-debug.jsonl
 /original_implementation/
 /references/
 /config.yaml
+/cmd/gp-socks/winres.json
+rsrc_windows_*.syso
